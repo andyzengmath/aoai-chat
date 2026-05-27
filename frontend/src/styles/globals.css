@@ -1,0 +1,426 @@
+@import "tailwindcss";
+@import "@fontsource-variable/onest/index.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource-variable/fraunces/wght-italic.css";
+@import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github-dark.css";
+
+/* iOS 26-inspired typography:
+   - Onest: a geometric variable sans, distinct from Inter; reads as Apple-
+     adjacent without being SF Pro. Used for everything chrome.
+   - JetBrains Mono: data, timer, telemetry.
+   - Fraunces italic: ONLY for the pondering math phrases, where italic serif
+     still earns its keep contextually. Not used for UI headings anymore. */
+@theme {
+  --font-sans: 'Onest Variable', 'Onest', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: 'Fraunces Variable', 'Fraunces', Georgia, serif;
+  --color-bg: #000000;
+  --color-accent-cyan: #5EEAD4;
+  --color-accent-violet: #A78BFA;
+  --color-accent-amber: #F4B860;
+}
+
+html, body {
+  font-family: var(--font-sans);
+  color: white;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Pure-black canvas with very faint blue/violet hue from the very corners.
+   The glass elements pick up vibrancy from the cosmic specks via backdrop-
+   filter `saturate`, so we keep the body ambient extremely subtle. */
+.cosmos-bg {
+  background:
+    radial-gradient(ellipse 60% 35% at 50% -8%,  rgba(99, 102, 241, 0.10), transparent 70%),
+    radial-gradient(ellipse 50% 35% at 95% 110%, rgba(56, 189, 248, 0.06), transparent 65%),
+    radial-gradient(ellipse 50% 35% at 5% 110%,  rgba(139, 92, 246, 0.06), transparent 65%),
+    #000000;
+}
+
+code, pre, kbd {
+  font-family: var(--font-mono);
+}
+
+.font-display {
+  font-family: var(--font-display);
+  font-variation-settings: 'opsz' 144, 'SOFT' 30;
+}
+
+/* ---------------------------------------------------------------------------
+   iOS 26 "Liquid Glass" — utility classes
+   ---------------------------------------------------------------------------
+   A real glass surface in iOS 26 has four characteristics we approximate:
+
+   1. Translucent body with strong backdrop blur + saturation boost (glass
+      picks up vibrancy from what's behind it).
+   2. Specular highlight strip along the TOP edge — the light source above.
+   3. Edge refraction — slightly different luminance at top vs bottom border.
+   4. Multi-layered ambient + drop shadow giving the element apparent mass.
+
+   Compose by applying `.glass` to any panel. Add `.glass-strong` for modal
+   surfaces (more saturate, deeper shadow). Add `.glass-tint-{color}` for
+   tinted variants used by user/assistant bubbles.
+   --------------------------------------------------------------------------- */
+
+.glass {
+  position: relative;
+  background: rgba(255, 255, 255, 0.045);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-color: rgba(255, 255, 255, 0.14);
+  border-radius: 22px;
+  box-shadow:
+    /* outer ambient — soft, diffuse */
+    0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    /* inner top edge subtle highlight */
+    0 -1px 0 rgba(0, 0, 0, 0.18) inset,
+    /* inner bottom edge subtle dark */
+    0 14px 32px -10px rgba(0, 0, 0, 0.55),
+    /* the lift */
+    0 4px 14px -6px rgba(0, 0, 0, 0.45);
+}
+
+.glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.09) 0%,
+    rgba(255, 255, 255, 0.02) 14%,
+    transparent 30%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+.glass > * { position: relative; z-index: 1; }
+
+.glass-strong {
+  background: rgba(255, 255, 255, 0.06);
+  -webkit-backdrop-filter: blur(34px) saturate(180%);
+  backdrop-filter: blur(34px) saturate(180%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.22) inset,
+    0 26px 60px -16px rgba(0, 0, 0, 0.7),
+    0 8px 24px -10px rgba(0, 0, 0, 0.55);
+}
+
+/* User-bubble tint: subtle violet wash baked into the glass */
+.glass-tint-user {
+  background:
+    linear-gradient(180deg, rgba(167, 139, 250, 0.12), rgba(167, 139, 250, 0.04));
+  border-color: rgba(167, 139, 250, 0.18);
+  border-top-color: rgba(167, 139, 250, 0.32);
+}
+
+/* Assistant-bubble tint: neutral, very subtly cool */
+.glass-tint-assistant {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+}
+
+/* Input field surrounding glass — slightly less aggressive, less shadow */
+.glass-input {
+  background: rgba(255, 255, 255, 0.04);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-color: rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 8px 20px -6px rgba(0, 0, 0, 0.45);
+  position: relative;
+}
+.glass-input::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.08) 0%,
+    transparent 26%
+  );
+  pointer-events: none;
+}
+
+/* Reading lane — a soft vertical dim behind the chat message column so
+   cosmic galaxies/stars don't compete with body text. Fades at the
+   edges so the backdrop still bleeds in. Centered ~720px wide. */
+.reading-lane {
+  background:
+    linear-gradient(180deg,
+      rgba(7, 8, 26, 0) 0%,
+      rgba(7, 8, 26, 0.4) 6%,
+      rgba(7, 8, 26, 0.55) 50%,
+      rgba(7, 8, 26, 0.4) 94%,
+      rgba(7, 8, 26, 0) 100%
+    );
+  mask-image: linear-gradient(90deg,
+    transparent 0%,
+    black 18%,
+    black 82%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(90deg,
+    transparent 0%,
+    black 18%,
+    black 82%,
+    transparent 100%
+  );
+}
+
+/* Decorative diagonal hairline used in the header */
+.diagonal-rule {
+  background-image: linear-gradient(
+    115deg,
+    transparent 0,
+    transparent 49%,
+    rgba(244, 184, 96, 0.35) 49.5%,
+    rgba(244, 184, 96, 0.35) 50.5%,
+    transparent 51%,
+    transparent 100%
+  );
+}
+
+/* -----------------------------------------------------------------------
+   Starfield — two layers at different scales, slowly drifting in opposing
+   directions, give a sense of cosmic parallax without a single image asset.
+   ----------------------------------------------------------------------- */
+/* Single static starfield — no animation, no parallax layer. The browser
+   paints this once on mount and never repaints it (modulo resize/scroll).
+   Drift animations on background-position were forcing a fullscreen repaint
+   every frame, which was the dominant perf cost on the page. */
+.starfield {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.85;
+  background-image:
+    radial-gradient(1.5px 1.5px at 22% 32%, rgba(255,255,255,1.0), transparent 65%),
+    radial-gradient(1px 1px at 61% 71%, rgba(255,255,255,0.85), transparent 65%),
+    radial-gradient(2px 2px at 82% 22%, rgba(220,235,255,1.0), transparent 65%),
+    radial-gradient(1px 1px at 38% 88%, rgba(255,255,255,0.7), transparent 65%),
+    radial-gradient(1.5px 1.5px at 92% 48%, rgba(180,210,255,0.95), transparent 65%),
+    radial-gradient(1px 1px at 13% 73%, rgba(255,255,255,0.8), transparent 65%),
+    radial-gradient(1.5px 1.5px at 73% 36%, rgba(220,230,255,0.95), transparent 65%),
+    radial-gradient(1px 1px at 8% 18%, rgba(255,255,255,0.7), transparent 65%),
+    radial-gradient(2px 2px at 47% 52%, rgba(255,255,255,0.6), transparent 65%),
+    radial-gradient(1.5px 1.5px at 5% 95%, rgba(199,210,254,0.85), transparent 65%),
+    radial-gradient(1px 1px at 95% 10%, rgba(180,210,255,0.7), transparent 65%),
+    radial-gradient(1px 1px at 30% 12%, rgba(255,255,255,0.55), transparent 65%),
+    radial-gradient(1px 1px at 17% 65%, rgba(255,255,255,0.7), transparent 60%),
+    radial-gradient(1.5px 1.5px at 47% 18%, rgba(180,210,255,0.85), transparent 60%),
+    radial-gradient(1px 1px at 53% 87%, rgba(255,255,255,0.65), transparent 60%);
+  background-size: 540px 540px;
+}
+
+/* Single distant galaxy — pale steel-blue, static, off in the corner. */
+.distant-galaxy {
+  position: fixed;
+  top: 10%;
+  left: 6%;
+  width: 320px;
+  height: 95px;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse 50% 60% at 50% 50%, rgba(186, 212, 255, 0.16), transparent 70%);
+  transform: rotate(-20deg);
+}
+.distant-galaxy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(ellipse 18% 30% at 50% 50%, rgba(220, 235, 255, 0.55), transparent 60%);
+}
+
+/* A handful of "lead" stars with diffraction spikes — fixed positions, give
+   the field a few unforgettable focal points instead of just generic dots. */
+.lead-stars {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.lead-stars::before,
+.lead-stars::after,
+.lead-stars > span {
+  content: '';
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1.5px rgba(255,255,255,0.95),
+    0 0 8px 2px rgba(255,255,255,0.5),
+    0 0 16px 4px rgba(255,235,200,0.25);
+}
+/* Lead stars at the periphery — all cool tones now */
+.lead-stars::before { top: 12%; left: 18%; }
+.lead-stars::after  { top: 72%; left: 14%; box-shadow:
+    0 0 0 1.5px rgba(180,210,255,0.95),
+    0 0 8px 2px rgba(180,210,255,0.5),
+    0 0 16px 4px rgba(180,210,255,0.22);
+}
+.lead-stars > span:nth-child(1) { top: 28%; right: 10%; box-shadow:
+    0 0 0 1.5px rgba(165, 220, 255, 0.95),
+    0 0 8px 2px rgba(140, 200, 255, 0.5),
+    0 0 16px 4px rgba(99, 102, 241, 0.22);
+}
+.lead-stars > span:nth-child(2) { top: 82%; right: 22%; box-shadow:
+    0 0 0 1px rgba(255,255,255,0.9),
+    0 0 6px 1.5px rgba(199, 210, 254, 0.5);
+}
+
+/* -----------------------------------------------------------------------
+   Black-hole accretion-disk rotation. Two layers spin at slightly different
+   rates to give the disk that turbulent, asymmetric Doppler-beamed look.
+   ----------------------------------------------------------------------- */
+@keyframes disk-spin-a {
+  to { transform: rotateX(72deg) rotate(360deg); }
+}
+@keyframes disk-spin-b {
+  to { transform: rotateX(72deg) scale(0.96) rotate(-360deg); }
+}
+.black-hole-disk  { animation: disk-spin-a 32s linear infinite; }
+.black-hole-ring  { animation: disk-spin-b 16s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .black-hole-disk, .black-hole-ring {
+    animation: none;
+  }
+}
+
+/* -----------------------------------------------------------------------
+   Pondering "redshift": as the timer ticks, the rotating math phrase
+   gradually warms from cyan -> amber -> ember. The .pondering-redshift-*
+   classes are applied based on elapsed time in StreamingBubble.
+   ----------------------------------------------------------------------- */
+/* Cool palette throughout — phrase still shifts color over time to convey
+   "time passing" but stays within the blue/violet end of the spectrum,
+   matching the deep-space theme. */
+.pondering-redshift-0 { color: rgba(125, 211, 252, 0.85); }  /* ice cyan */
+.pondering-redshift-1 { color: rgba(165, 180, 252, 0.85); }  /* indigo */
+.pondering-redshift-2 { color: rgba(196, 181, 253, 0.88); }  /* violet */
+.pondering-redshift-3 { color: rgba(232, 121, 249, 0.90); }  /* magenta */
+.pondering-redshift-0, .pondering-redshift-1, .pondering-redshift-2, .pondering-redshift-3 {
+  transition: color 1.2s ease;
+}
+
+/* Re-style hljs inside our dark glass surfaces — the github-dark theme is fine
+   but we want code blocks to feel of-a-piece with the message bubble. */
+.hljs {
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+}
+
+/* KaTeX inherits font size of surrounding text; nudge inline math up slightly */
+.katex {
+  font-size: 1.02em;
+}
+.katex-display {
+  margin: 0.75rem 0 !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Reduced-motion respect — kill all decorative animation. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Focus ring — visible only on keyboard nav */
+*:focus-visible {
+  outline: 2px solid rgb(94 234 212 / 0.55);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.05);
+  color: rgb(255 255 255 / 0.5);
+}
+
+/* Scrollbar — liquid-glass styling.
+   - Track is invisible by default (the dark canvas IS the track).
+   - Thumb is a cool translucent capsule with a hairline highlight at the top,
+     matching the .glass utility's specular treatment.
+   - Hover boosts opacity + a faint sky-cyan glow.
+   - Firefox honours `scrollbar-color` / `scrollbar-width` separately. */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(125, 211, 252, 0.18) transparent;
+}
+*:hover {
+  scrollbar-color: rgba(125, 211, 252, 0.30) transparent;
+}
+
+/* WebKit / Chromium */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  border: none;
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(186, 230, 253, 0.22) 0%,
+    rgba(125, 211, 252, 0.16) 40%,
+    rgba(99, 102, 241, 0.14) 100%
+  );
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  transition: background 160ms ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(186, 230, 253, 0.45) 0%,
+    rgba(125, 211, 252, 0.35) 40%,
+    rgba(99, 102, 241, 0.28) 100%
+  );
+  background-clip: padding-box;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 0 8px rgba(125, 211, 252, 0.18);
+}
+::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(
+    180deg,
+    rgba(186, 230, 253, 0.55) 0%,
+    rgba(125, 211, 252, 0.45) 50%,
+    rgba(99, 102, 241, 0.35) 100%
+  );
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
