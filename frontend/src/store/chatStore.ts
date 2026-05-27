@@ -164,22 +164,18 @@ function newId() {
 // in store state (it would trigger React renders we don't need).
 let currentAbortController: AbortController | null = null
 
-// "Stale" watchdog: trip when no SSE event arrives for this long. The
-// previous 5-min cutoff was firing during legitimate long-thinking gaps
-// (gpt-5.4-pro can go several minutes between reasoning_summary chunks
-// on hard prompts). 15 minutes gives meaningful headroom while still
-// catching actually-dead connections in a reasonable window.
-const STALE_STREAM_TIMEOUT_MS = 15 * 60 * 1000
+// "Stale" watchdog: trip when no SSE event arrives for this long. Now
+// includes `keepalive` events forwarded from the backend, so this only
+// fires for genuinely dead connections. The freshness dot still goes
+// rose at 90s of silence so the user sees something is off well before
+// the auto-abort.
+const STALE_STREAM_TIMEOUT_MS = 30 * 60 * 1000
 
-// "No-content" watchdog: trip when total elapsed time exceeds this AND the
-// model has yet to emit a single output_text delta. This catches the
-// runaway-reasoning failure mode (gpt-5.4-pro on xhigh effort spends an
-// arbitrary amount of time thinking and never reaches output). Lets the
-// inline-error suggest "try lower effort" before more time is wasted.
-// Raised from 20 → 45 min for the same reason — research-grade prompts
-// at high/xhigh effort routinely take 20+ minutes of reasoning before
-// the first output token.
-const NO_CONTENT_TIMEOUT_MS = 45 * 60 * 1000
+// "No-content" watchdog: trip when total elapsed exceeds this AND no
+// `output_text` delta has arrived yet. Catches the gpt-5.4-pro-on-xhigh
+// runaway-reasoning case where the model never reaches output. Generous
+// upper bound — 60 min covers all but the most extreme research prompts.
+const NO_CONTENT_TIMEOUT_MS = 60 * 60 * 1000
 
 function turnsToMessages(turns: Turn[]): Message[] {
   return turns
@@ -526,6 +522,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           path = evt.data?.path ?? path
         } else if (evt.event === 'saved') {
           await get().refreshConversations()
+        } else if (evt.event === 'keepalive') {
+          // Connection alive but no model progress. Update lastEventAt so
+          // the freshness dot stays green and the stale watchdog (which
+          // was just reset by armStaleTimer() at the top of the loop)
+          // doesn't fire. Don't touch any other streaming state.
+          set((s) =>
+            s.streaming
+              ? { streaming: { ...s.streaming, lastEventAt: Date.now() } }
+              : {},
+          )
         } else if (evt.event === 'error') {
           throw new Error(evt.data?.message || evt.data?.error || 'stream error')
         }

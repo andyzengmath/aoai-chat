@@ -312,6 +312,13 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
                     "message": (getattr(err, "message", "") if err else "")[:500],
                 }
                 return
+            elif ev_type == "keepalive" or ev_type == "":
+                # Azure sends sparse keepalive events to prove the connection
+                # is alive. Forward them so the frontend can reset its stale
+                # watchdog and keep the freshness dot green during long
+                # internal-reasoning gaps that emit no summary chunks. Empty
+                # type events (some SDK versions) treated the same way.
+                yield {"type": "keepalive"}
     except Exception as e:  # noqa: BLE001
         yield {"type": "error", "error": "stream_iter_failed", "message": str(e)[:500]}
 
