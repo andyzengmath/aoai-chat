@@ -202,6 +202,15 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
         # via `response.reasoning_summary*.delta` events so the user can watch
         # the model think rather than staring at a static "thinking…" placeholder.
         kwargs["reasoning"] = {"effort": req.reasoning_effort, "summary": "auto"}
+        # `background=True` runs the response asynchronously on Azure's side,
+        # untangling it from any single HTTP connection's lifetime. This avoids
+        # "peer closed connection without sending complete message body" errors
+        # on requests that exceed Azure's per-connection timeout (~30 min for
+        # sync requests). The trade-off is significantly higher time-to-first-
+        # token, so we only opt in for the effort levels that actually need it
+        # — medium/low/minimal complete fast enough to stay synchronous.
+        if req.reasoning_effort in ("high", "xhigh"):
+            kwargs["background"] = True
     if req.max_output_tokens:
         kwargs["max_output_tokens"] = req.max_output_tokens
 
