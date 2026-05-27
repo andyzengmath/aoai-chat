@@ -164,18 +164,22 @@ function newId() {
 // in store state (it would trigger React renders we don't need).
 let currentAbortController: AbortController | null = null
 
-// "Stale" watchdog: trip when no SSE event arrives for this long. Healthy
-// Azure reasoning sessions emit something every <60s; 5 min is 5x the
-// realistic worst-case gap. Drop the connection rather than make the user
-// sit through a 90-minute ghost stream.
-const STALE_STREAM_TIMEOUT_MS = 5 * 60 * 1000
+// "Stale" watchdog: trip when no SSE event arrives for this long. The
+// previous 5-min cutoff was firing during legitimate long-thinking gaps
+// (gpt-5.4-pro can go several minutes between reasoning_summary chunks
+// on hard prompts). 15 minutes gives meaningful headroom while still
+// catching actually-dead connections in a reasonable window.
+const STALE_STREAM_TIMEOUT_MS = 15 * 60 * 1000
 
 // "No-content" watchdog: trip when total elapsed time exceeds this AND the
 // model has yet to emit a single output_text delta. This catches the
 // runaway-reasoning failure mode (gpt-5.4-pro on xhigh effort spends an
 // arbitrary amount of time thinking and never reaches output). Lets the
 // inline-error suggest "try lower effort" before more time is wasted.
-const NO_CONTENT_TIMEOUT_MS = 20 * 60 * 1000
+// Raised from 20 → 45 min for the same reason — research-grade prompts
+// at high/xhigh effort routinely take 20+ minutes of reasoning before
+// the first output token.
+const NO_CONTENT_TIMEOUT_MS = 45 * 60 * 1000
 
 function turnsToMessages(turns: Turn[]): Message[] {
   return turns
