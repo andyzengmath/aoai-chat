@@ -405,6 +405,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
     }
 
+    // Watchdog state lives in function scope (not try-scope) so the
+    // catch and finally blocks below can read them.
+    //   1. STALE — no events at all for STALE_STREAM_TIMEOUT_MS → abort
+    //   2. NO-CONTENT — total elapsed exceeds NO_CONTENT_TIMEOUT_MS and
+    //      the model still hasn't emitted any output_text → abort
+    // The first catches dead connections; the second catches the
+    // model-is-still-reasoning-after-an-eternity failure mode that the
+    // stale watchdog can't see (because reasoning_delta events keep
+    // resetting it).
+    let watchdogReason: null | 'stale' | 'no_content' = null
+    let firstContentSeen = false
+    let staleTimer: ReturnType<typeof setTimeout> | null = null
+    let noContentTimer: ReturnType<typeof setTimeout> | null = null
+    const armStaleTimer = () => {
+      if (staleTimer) clearTimeout(staleTimer)
+      staleTimer = setTimeout(() => {
+        watchdogReason = 'stale'
+        currentAbortController?.abort()
+      }, STALE_STREAM_TIMEOUT_MS)
+    }
+
     try {
       let responseId: string | null = null
       let path: 'responses' | 'chat' | null = null
@@ -421,26 +442,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       currentAbortController = new AbortController()
       const signal = currentAbortController.signal
 
-      // Two watchdogs:
-      //   1. STALE — no events at all for STALE_STREAM_TIMEOUT_MS → abort
-      //   2. NO-CONTENT — total elapsed exceeds NO_CONTENT_TIMEOUT_MS and
-      //      the model still hasn't emitted any output_text → abort
-      // The first catches dead connections; the second catches the
-      // model-is-still-reasoning-after-an-eternity failure mode that the
-      // stale watchdog can't see (because reasoning_delta events keep
-      // resetting it).
-      let watchdogReason: null | 'stale' | 'no_content' = null
-      let firstContentSeen = false
-      let staleTimer: ReturnType<typeof setTimeout> | null = null
-      const armStaleTimer = () => {
-        if (staleTimer) clearTimeout(staleTimer)
-        staleTimer = setTimeout(() => {
-          watchdogReason = 'stale'
-          currentAbortController?.abort()
-        }, STALE_STREAM_TIMEOUT_MS)
-      }
+      // Arm both watchdogs now that the AbortController exists.
       armStaleTimer()
-      const noContentTimer = setTimeout(() => {
+      noContentTimer = setTimeout(() => {
         if (!firstContentSeen) {
           watchdogReason = 'no_content'
           currentAbortController?.abort()
@@ -601,7 +605,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
     } finally {
       if (staleTimer) clearTimeout(staleTimer)
-      clearTimeout(noContentTimer)
+      if (noContentTimer) clearTimeout(noContentTimer)
       currentAbortController = null
     }
   },
