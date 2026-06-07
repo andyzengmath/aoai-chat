@@ -46,11 +46,8 @@ function MessageBubbleImpl({ msg, streaming = false }: Props) {
             <MarkdownRenderer content={msg.content} />
           </div>
         )}
-        {!streaming && msg.role === 'assistant' && (msg.tokens || msg.deployment) && (
-          <div className="mt-2 text-[10px] text-white/30 font-mono">
-            {msg.deployment}
-            {msg.tokens != null && ` · ${msg.tokens} tok`}
-          </div>
+        {!streaming && msg.role === 'assistant' && (
+          <MessageFooter msg={msg} />
         )}
       </div>
     </motion.div>
@@ -64,3 +61,35 @@ export const MessageBubble = memo(
     prev.msg.content === next.msg.content &&
     prev.streaming === next.streaming,
 )
+
+function formatThinking(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) {
+    const m = Math.floor(s / 60)
+    const rem = s % 60
+    return `${m}m ${rem.toString().padStart(2, '0')}s`
+  }
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return `${h}h ${m.toString().padStart(2, '0')}m`
+}
+
+function MessageFooter({ msg }: { msg: Message }) {
+  const parts: string[] = []
+  if (msg.deployment) parts.push(msg.deployment)
+  if (msg.thinkingMs != null && msg.thinkingMs > 0) {
+    parts.push(`thought ${formatThinking(msg.thinkingMs)}`)
+  }
+  if (msg.reasoningChars != null && msg.reasoningChars > 0) {
+    parts.push(`${msg.reasoningChars.toLocaleString()} ch reasoning`)
+  }
+  if (msg.tokens != null) parts.push(`${msg.tokens} tok`)
+  if (msg.path) parts.push(msg.path === 'responses' ? 'responses · v1' : 'chat completions')
+  if (parts.length === 0) return null
+  return (
+    <div className="mt-2 text-[10px] text-white/30 font-mono">
+      {parts.join(' · ')}
+    </div>
+  )
+}

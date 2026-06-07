@@ -24,6 +24,12 @@ export interface Message {
   tokens?: number | null
   deployment?: string | null
   responseId?: string | null
+  // Captured from the stream and preserved post-commit so the user can still
+  // see how long the model thought + how much reasoning happened after the
+  // streaming bubble is gone. Only meaningful for assistant messages.
+  thinkingMs?: number | null
+  reasoningChars?: number | null
+  path?: 'responses' | 'chat' | null
 }
 
 interface StreamingState {
@@ -566,6 +572,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         timestamp: new Date().toISOString(),
         deployment: selectedDeployment,
         responseId,
+        thinkingMs: Date.now() - startedAt,
+        reasoningChars: reasoningCharsTotal,
+        path,
       }
       set((s) => ({
         activeMessages: [...s.activeMessages, assistantMsg],
