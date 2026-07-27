@@ -5,6 +5,16 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+ReasoningEffort = Literal[
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+]
+
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
@@ -20,8 +30,9 @@ class ChatRequest(BaseModel):
     # The Responses API uses server-stored state via previous_response_id.
     history: list[ChatMessage] = Field(default_factory=list)
     instructions: str | None = None
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
-    max_output_tokens: int | None = None
+    reasoning_effort: ReasoningEffort | None = None
+    reasoning_mode: Literal["standard", "pro"] | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=128_000)
 
 
 class TokenUsage(BaseModel):

@@ -29,8 +29,7 @@ export function ModelPicker() {
         <DropdownMenu.Content
           align="start"
           sideOffset={4}
-          className="min-w-[240px] rounded-xl border border-white/10 bg-[#0F1020]/95 backdrop-blur-xl
-                     p-1 shadow-2xl shadow-black/50"
+          className="min-w-[240px] rounded-xl border border-white/10 surface-elevated p-1"
         >
           {deployments.length === 0 && (
             <div className="px-3 py-3 text-xs text-white/40">
@@ -51,6 +50,11 @@ export function ModelPicker() {
                 <span className="font-mono">{d.id}</span>
                 <span className="text-[10px] text-white/40">
                   {d.supports_responses_api ? 'Responses API' : 'Chat Completions'}
+                  {d.model_version ? ` · ${d.model_version}` : ''}
+                  {d.context_window_tokens
+                    ? ` · ${Number((d.context_window_tokens / 1_000_000).toFixed(2))}M ctx`
+                    : ''}
+                  {d.reasoning_modes.includes('pro') ? ' · Pro' : ''}
                 </span>
               </div>
               {d.id === selected && <Check size={14} className="text-cyan-300" />}

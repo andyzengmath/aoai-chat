@@ -54,7 +54,7 @@ export default function App() {
       <Sidebar />
 
       <main className="relative z-10 flex-1 flex flex-col min-w-0">
-        <header className="relative border-b border-white/5 bg-black/30 backdrop-blur-xl">
+        <header className="relative border-b border-white/5 surface-chrome">
           {/* Glowing baseline scanner */}
           <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-400/35 to-transparent" />
           <div className="px-6 py-3 flex items-center justify-between gap-3">
@@ -74,7 +74,10 @@ export default function App() {
                 <SlidersHorizontal size={12} />
                 <span className="hidden sm:inline">{activePresetLabel}</span>
                 <span className="hidden sm:inline text-white/30">·</span>
-                <span className="font-mono">{params.reasoningEffort}</span>
+                <span className="font-mono">
+                  {params.reasoningMode === 'pro' ? 'pro · ' : ''}
+                  {params.reasoningEffort}
+                </span>
               </button>
               <button
                 onClick={() => setPaletteOpen(true)}

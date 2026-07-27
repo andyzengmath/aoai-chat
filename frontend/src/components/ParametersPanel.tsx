@@ -3,12 +3,32 @@ import { RotateCcw, Sparkles, X } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 
 import {
-  getValidEfforts,
   MAX_TOKENS_BOUNDS,
   PROMPT_PRESETS,
   type ReasoningEffort,
+  type ReasoningMode,
 } from '../config/presets'
 import { useChatStore } from '../store/chatStore'
+
+const EFFORT_DESCRIPTIONS: Record<ReasoningEffort, string> = {
+  none: 'No deliberate reasoning. Best for latency-sensitive retrieval.',
+  minimal: 'Fastest available reasoning. Good for simple, direct asks.',
+  low: 'Light reasoning; optimized for speed and cost.',
+  medium: 'Balanced default for planning, coding, and analysis.',
+  high: 'Deep reasoning for difficult debugging and complex workflows.',
+  xhigh: 'Extended reasoning for research and long-running hard problems.',
+  max: 'Maximum single-agent reasoning for the hardest quality-first tasks.',
+}
+
+function formatTokenLimit(value: number): string {
+  if (value >= 1_000_000) {
+    return `${Number((value / 1_000_000).toFixed(2))}M`
+  }
+  if (value >= 1_000) {
+    return `${Math.round(value / 1_000)}K`
+  }
+  return value.toLocaleString()
+}
 
 export function ParametersPanel() {
   const open = useChatStore((s) => s.parametersOpen)
@@ -19,23 +39,35 @@ export function ParametersPanel() {
   const deployments = useChatStore((s) => s.deployments)
   const selectedDeployment = useChatStore((s) => s.selectedDeployment)
 
-  // Reasoning effort only applies to Responses-API-capable deployments.
-  const showReasoning = useMemo(
-    () => deployments.find((d) => d.id === selectedDeployment)?.supports_responses_api ?? false,
+  const selectedModel = useMemo(
+    () => deployments.find((d) => d.id === selectedDeployment),
     [deployments, selectedDeployment],
   )
-
-  const validEfforts = useMemo(
-    () => getValidEfforts(selectedDeployment),
-    [selectedDeployment],
-  )
+  const validEfforts = selectedModel?.reasoning_efforts ?? []
+  const supportsPro = selectedModel?.reasoning_modes.includes('pro') ?? false
+  const showReasoning = validEfforts.length > 0
+  const maxOutputTokens = selectedModel?.max_output_tokens ?? MAX_TOKENS_BOUNDS.max
 
   // If the current effort isn't valid for the selected model, coerce it.
   useEffect(() => {
     if (showReasoning && !validEfforts.includes(params.reasoningEffort)) {
-      setParams({ reasoningEffort: 'medium' })
+      setParams({
+        reasoningEffort: validEfforts.includes('medium') ? 'medium' : validEfforts[0],
+      })
     }
   }, [showReasoning, validEfforts, params.reasoningEffort, setParams])
+
+  useEffect(() => {
+    if (selectedModel && !supportsPro && params.reasoningMode === 'pro') {
+      setParams({ reasoningMode: 'standard' })
+    }
+  }, [params.reasoningMode, selectedModel, setParams, supportsPro])
+
+  useEffect(() => {
+    if (params.maxOutputTokens > maxOutputTokens) {
+      setParams({ maxOutputTokens })
+    }
+  }, [maxOutputTokens, params.maxOutputTokens, setParams])
 
   // Close on Esc
   useEffect(() => {
@@ -72,11 +104,10 @@ export function ParametersPanel() {
             exit={{ x: 360, opacity: 0 }}
             transition={{ duration: 0.22, ease: 'easeOut' }}
             className="fixed top-0 right-0 bottom-0 z-40 w-[380px] max-w-[90vw]
-                       bg-[#0F1020]/95 border-l border-white/10 backdrop-blur-xl
-                       overflow-y-auto shadow-2xl shadow-black/60"
+                       surface-elevated border-l border-white/10 overflow-y-auto"
           >
             <header className="sticky top-0 z-10 flex items-center justify-between px-5 py-4
-                               bg-[#0F1020]/90 backdrop-blur-xl border-b border-white/5">
+                               bg-[#0B0D20] border-b border-white/5">
               <div className="flex items-center gap-2">
                 <Sparkles size={14} className="text-cyan-300" />
                 <h2 className="text-sm font-semibold tracking-tight">Parameters</h2>
@@ -160,12 +191,14 @@ export function ParametersPanel() {
                   </label>
                   <div
                     className="grid gap-1 p-1 rounded-lg bg-white/5 border border-white/10"
-                    style={{ gridTemplateColumns: `repeat(${validEfforts.length}, minmax(0, 1fr))` }}
+                    style={{
+                      gridTemplateColumns: `repeat(${Math.min(validEfforts.length, 3)}, minmax(0, 1fr))`,
+                    }}
                   >
                     {validEfforts.map((effort) => (
                       <button
                         key={effort}
-                        onClick={() => setParams({ reasoningEffort: effort as ReasoningEffort })}
+                        onClick={() => setParams({ reasoningEffort: effort })}
                         className={`px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
                           params.reasoningEffort === effort
                             ? 'bg-cyan-400/20 border border-cyan-300/30 text-cyan-200'
@@ -177,22 +210,24 @@ export function ParametersPanel() {
                     ))}
                   </div>
                   <p className="text-[11px] text-white/40 leading-snug">
-                    {params.reasoningEffort === 'minimal' &&
-                      'Fastest, least thinking. Good for retrieval-style asks.'}
-                    {params.reasoningEffort === 'low' && 'Light thinking; faster, lower cost.'}
-                    {params.reasoningEffort === 'medium' &&
-                      'Balanced default. Good for most tasks.'}
-                    {params.reasoningEffort === 'high' &&
-                      'Deepest thinking; more tokens, more cost, best reasoning.'}
-                    {params.reasoningEffort === 'xhigh' &&
-                      'Maximum thinking budget. Slowest; reserve for hard problems.'}
+                    {EFFORT_DESCRIPTIONS[params.reasoningEffort]}
                   </p>
+                  {selectedModel?.context_window_tokens &&
+                    selectedModel.max_input_tokens &&
+                    selectedModel.max_output_tokens && (
+                    <p className="text-[10px] text-cyan-200/55 font-mono">
+                      {formatTokenLimit(selectedModel.context_window_tokens)} context ·{' '}
+                      {formatTokenLimit(selectedModel.max_input_tokens)} input ·{' '}
+                      {formatTokenLimit(selectedModel.max_output_tokens)} output
+                    </p>
+                  )}
                   {selectedDeployment === 'gpt-5.4-pro' && (
                     <p className="text-[10px] text-white/30 italic">
                       gpt-5.4-pro only supports medium / high / xhigh.
                     </p>
                   )}
-                  {params.reasoningEffort === 'xhigh' && (
+                  {params.reasoningEffort === 'xhigh' &&
+                    selectedDeployment === 'gpt-5.4-pro' && (
                     <div className="mt-2 rounded-md border border-rose-400/25 bg-rose-500/[0.07] px-2.5 py-2">
                       <p className="text-[11px] text-rose-200/85 leading-snug">
                         <span className="font-semibold">Heads up — xhigh frequently produces no output.</span>{' '}
@@ -215,6 +250,44 @@ export function ParametersPanel() {
                 </section>
               )}
 
+              {supportsPro && (
+                <section className="space-y-2">
+                  <label className="text-[10px] uppercase tracking-wider text-white/40 font-medium">
+                    Reasoning mode
+                  </label>
+                  <div className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-white/5 border border-white/10">
+                    {(['standard', 'pro'] satisfies ReasoningMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => setParams({ reasoningMode: mode })}
+                        className={`px-2 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                          params.reasoningMode === mode
+                            ? 'bg-cyan-400/20 border border-cyan-300/30 text-cyan-200'
+                            : 'text-white/60 hover:text-white hover:bg-white/5'
+                        }`}
+                      >
+                        {mode === 'pro' ? 'Pro' : 'Standard'}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-white/40 leading-snug">
+                    {params.reasoningMode === 'pro'
+                      ? 'Pro mode performs additional model work for difficult quality-first tasks. Expect higher latency and token usage.'
+                      : 'Standard mode streams normally and is the best default for most work.'}
+                  </p>
+                </section>
+              )}
+
+              {(params.reasoningEffort === 'max' || params.reasoningMode === 'pro') && (
+                <div className="rounded-lg border border-amber-300/20 bg-amber-400/[0.06] px-3 py-2.5">
+                  <p className="text-[11px] text-amber-100/75 leading-relaxed">
+                    <span className="font-semibold text-amber-100/90">Quality-first configuration.</span>{' '}
+                    Max effort and Pro mode are independent and can be combined, but either can
+                    substantially increase latency and cost.
+                  </p>
+                </div>
+              )}
+
               {/* Max output tokens */}
               <section className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -224,7 +297,7 @@ export function ParametersPanel() {
                   <input
                     type="number"
                     min={MAX_TOKENS_BOUNDS.min}
-                    max={MAX_TOKENS_BOUNDS.max}
+                    max={maxOutputTokens}
                     step={MAX_TOKENS_BOUNDS.step}
                     value={params.maxOutputTokens}
                     onChange={(e) => {
@@ -233,7 +306,7 @@ export function ParametersPanel() {
                         setParams({
                           maxOutputTokens: Math.max(
                             MAX_TOKENS_BOUNDS.min,
-                            Math.min(MAX_TOKENS_BOUNDS.max, v),
+                            Math.min(maxOutputTokens, v),
                           ),
                         })
                       }
@@ -246,7 +319,7 @@ export function ParametersPanel() {
                 <input
                   type="range"
                   min={MAX_TOKENS_BOUNDS.min}
-                  max={MAX_TOKENS_BOUNDS.max}
+                  max={maxOutputTokens}
                   step={MAX_TOKENS_BOUNDS.step}
                   value={params.maxOutputTokens}
                   onChange={(e) => setParams({ maxOutputTokens: Number(e.target.value) })}
@@ -254,7 +327,7 @@ export function ParametersPanel() {
                 />
                 <div className="flex justify-between text-[10px] text-white/30 font-mono">
                   <span>{MAX_TOKENS_BOUNDS.min.toLocaleString()}</span>
-                  <span>{MAX_TOKENS_BOUNDS.max.toLocaleString()}</span>
+                  <span>{maxOutputTokens.toLocaleString()}</span>
                 </div>
               </section>
 

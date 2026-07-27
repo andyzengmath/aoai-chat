@@ -3,6 +3,7 @@
  * In dev: requests are proxied via Vite from :5173 → :8765.
  * In prod: served from the same FastAPI process on :8765.
  */
+import type { ReasoningEffort, ReasoningMode } from '../config/presets'
 
 export interface AppConfig {
   endpoint: string
@@ -18,7 +19,13 @@ export interface AppConfig {
 export interface Deployment {
   id: string
   model: string
+  model_version: string | null
   supports_responses_api: boolean
+  reasoning_efforts: ReasoningEffort[]
+  reasoning_modes: ReasoningMode[]
+  context_window_tokens: number | null
+  max_input_tokens: number | null
+  max_output_tokens: number | null
 }
 
 export interface DeploymentsResponse {
@@ -82,6 +89,11 @@ export const api = {
   testAuth: () =>
     jfetch<{ ok: boolean; scope: string; token_prefix: string; token_len: number }>(
       '/api/config/test-auth',
+      { method: 'POST' },
+    ),
+  cancelResponse: (responseId: string) =>
+    jfetch<{ response_id: string; status: string }>(
+      `/api/responses/${encodeURIComponent(responseId)}/cancel`,
       { method: 'POST' },
     ),
 

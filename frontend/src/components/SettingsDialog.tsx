@@ -49,11 +49,11 @@ export function SettingsDialog() {
   return (
     <Dialog.Root open={open} onOpenChange={openSettings}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
+        <Dialog.Overlay className="fixed inset-0 surface-overlay z-40" />
         <Dialog.Content
           className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50
                      w-[min(560px,calc(100vw-2rem))] max-h-[85vh] overflow-y-auto
-                     rounded-2xl border border-white/10 bg-[#0F1020] p-6 shadow-2xl"
+                     rounded-2xl border border-white/10 surface-elevated p-6"
         >
           <div className="flex items-center justify-between mb-6">
             <Dialog.Title className="text-lg font-semibold tracking-tight">Settings</Dialog.Title>
@@ -120,6 +120,11 @@ export function SettingsDialog() {
                     <span className="font-mono text-sm">{d.id}</span>
                     <span className="text-[10px] text-white/40">
                       {d.supports_responses_api ? 'Responses API' : 'Chat Completions'}
+                      {d.model_version ? ` · ${d.model_version}` : ''}
+                      {d.context_window_tokens
+                        ? ` · ${Number((d.context_window_tokens / 1_000_000).toFixed(2))}M context`
+                        : ''}
+                      {d.reasoning_modes.includes('pro') ? ' · Pro mode' : ''}
                     </span>
                   </div>
                   <button
@@ -137,7 +142,7 @@ export function SettingsDialog() {
                 value={newDeployment}
                 onChange={(e) => setNewDeployment(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && submitAdd()}
-                placeholder="deployment name (e.g. gpt-5.5)"
+                placeholder="deployment name (e.g. gpt-5.6-sol)"
                 className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10
                            text-sm text-white placeholder:text-white/30
                            focus:outline-none focus:border-cyan-400/40 font-mono"

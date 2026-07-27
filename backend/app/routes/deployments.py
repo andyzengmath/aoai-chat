@@ -48,7 +48,13 @@ def _serialize() -> dict:
             {
                 "id": d.id,
                 "model": d.model,
+                "model_version": d.model_version,
                 "supports_responses_api": d.supports_responses_api,
+                "reasoning_efforts": list(d.reasoning_efforts),
+                "reasoning_modes": list(d.reasoning_modes),
+                "context_window_tokens": d.context_window_tokens,
+                "max_input_tokens": d.max_input_tokens,
+                "max_output_tokens": d.max_output_tokens,
             }
             for d in items
         ],

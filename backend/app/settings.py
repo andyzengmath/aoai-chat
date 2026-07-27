@@ -24,7 +24,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULT_SAVE_DIR = REPO_ROOT / "conversations"
 
 
-DEFAULT_DEPLOYMENTS = ["gpt-5.4-pro", "gpt-5.5"]
+DEFAULT_DEPLOYMENTS = ["gpt-5.6-sol", "gpt-5.4-pro", "gpt-5.5"]
 
 
 class PersistedConfig(BaseModel):
@@ -44,6 +44,8 @@ class PersistedConfig(BaseModel):
 class EnvOverrides(BaseSettings):
     AOAI_ENDPOINT: str = ""
     AOAI_DEPLOYMENT: str = ""
+    ENDPOINT_URL: str = ""
+    DEPLOYMENT_NAME: str = ""
     AOAI_API_VERSION: str = ""
     AOAI_SAVE_DIR: str = ""
     AOAI_TOKEN_SCOPE: str = ""
@@ -83,8 +85,13 @@ def effective_config() -> PersistedConfig:
     # Seed known_deployments with the defaults if neither persisted nor env set it.
     known = persisted.known_deployments or list(DEFAULT_DEPLOYMENTS)
     return PersistedConfig(
-        endpoint=env.AOAI_ENDPOINT or persisted.endpoint,
-        default_deployment=env.AOAI_DEPLOYMENT or persisted.default_deployment or (known[0] if known else ""),
+        endpoint=env.AOAI_ENDPOINT or env.ENDPOINT_URL or persisted.endpoint,
+        default_deployment=(
+            env.AOAI_DEPLOYMENT
+            or env.DEPLOYMENT_NAME
+            or persisted.default_deployment
+            or (known[0] if known else "")
+        ),
         known_deployments=known,
         api_version=env.AOAI_API_VERSION or persisted.api_version,
         save_dir=env.AOAI_SAVE_DIR or persisted.save_dir or str(DEFAULT_SAVE_DIR),

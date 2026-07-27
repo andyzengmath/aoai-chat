@@ -12,7 +12,7 @@ export function Sidebar() {
   const openSettings = useChatStore((s) => s.openSettings)
 
   return (
-    <aside className="w-72 shrink-0 border-r border-white/5 bg-black/30 backdrop-blur-xl flex flex-col">
+    <aside className="relative z-10 w-72 shrink-0 border-r border-white/5 surface-chrome flex flex-col">
       <div className="p-3 border-b border-white/5">
         <button
           onClick={newConversation}

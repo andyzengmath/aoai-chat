@@ -4,13 +4,14 @@ A lightweight, futuristic-looking ChatGPT-style client for Azure OpenAI — buil
 
 - **Managed-identity auth** via `DefaultAzureCredential` — no API keys in code
 - **Responses API** with `previous_response_id` chaining + server-side compaction (for 1M-context performance)
+- **GPT-5.6** with `max` effort and independent Standard/Pro reasoning modes
 - **Chat Completions fallback** for any deployment that doesn't expose Responses
 - **Streaming** via Server-Sent Events with reasoning-summary ticker, freshness indicator, and Stop button
 - **Inline LaTeX** rendering (KaTeX) and GitHub-flavored Markdown with code highlighting
 - **Transcripts** saved locally as `.md` files in `conversations/`
 - **iOS 26 "Liquid Glass" UI** — translucent surfaces, deep black canvas, Onest typeface, cosmic accents
 - **Terminal-style history** — ↑ / ↓ in the input bar recall previous prompts
-- **Virtualized** message list — handles huge conversations without slowdown
+- **Stable native scrolling** with bottom pinning for long, variable-height Markdown
 - **Two-port dev**, **one-port prod** — Vite proxy → FastAPI in dev, FastAPI serves built bundle in prod
 
 ## Prerequisites
@@ -91,37 +92,47 @@ uv sync --extra dev
 uv run pytest -v
 ```
 
-29 tests cover capability detection (`supports_responses_api`), transcript round-trip, atomic writes, frontmatter shape, and conversation indexing.
+Backend tests cover model capabilities, reasoning-mode validation,
+background-stream recovery and cancellation, transcript round-trip, atomic
+writes, frontmatter shape, and conversation indexing.
 
-## Notes on `gpt-5.4-pro` (and the `xhigh` failure mode)
+## GPT-5.6, Pro mode, and context limits
 
-`gpt-5.4-pro` and `gpt-5.5` are **Responses-API-only** models — Chat Completions returns `400 unsupported` for them. The app routes correctly because both are in `KNOWN_RESPONSES_MODELS` in `backend/app/aoai_client.py`.
+The default deployment is `gpt-5.6-sol`. The verified Azure deployment uses model
+version `2026-07-09` on `GlobalStandard`.
 
-### Documented limits (per Azure docs, as of 2026-05)
+### Documented limits (Azure docs, July 2026)
 
-| Model | Context window | Max output tokens (reasoning + text combined) |
-|---|---|---|
-| `gpt-5.4-pro` | 1,050,000 | 128,000 |
-| `gpt-5.5` | 1,050,000 | 128,000 |
-| `gpt-5.4` / `5.4-mini` / `5.4-nano` | 1,050,000 / 400,000 / 400,000 | 128,000 |
-| `gpt-5-pro` | 400,000 | 128,000 |
-| `gpt-5` / `-mini` / `-nano` | 400,000 | 128,000 |
+| Model | Context window | Maximum input | Maximum output |
+|---|---:|---:|---:|
+| `gpt-5.6-sol` (`2026-07-09`) | 1,050,000 | 922,000 | 128,000 |
+| `gpt-5.4-pro` | 1,050,000 | 922,000 | 128,000 |
 
-The API does **not** reject oversized `max_output_tokens` — passing 1,000,000 is accepted but internally clamped to the deployment cap. Setting the slider to its max (131,072) is safe and recommended for reasoning-heavy prompts.
+The Parameters panel gets these limits from the backend capability contract and
+caps `max_output_tokens` at the deployment's documented 128,000-token ceiling.
 
-### Reasoning effort — what it actually does
+### Reasoning effort and mode are independent
 
-`reasoning_effort` controls how many **internal reasoning tokens** the model uses. Those tokens count toward `max_output_tokens` together with the visible output text. Effort levels approximate (empirical):
+`gpt-5.6-sol` accepts `none`, `low`, `medium`, `high`, `xhigh`, and `max`.
+Higher effort can improve difficult work at the cost of latency and output tokens.
 
-| Effort | Typical reasoning tokens (hard prompt) |
+| Effort | Intended use |
 |---|---|
-| `minimal` | 200 – 1,000 |
-| `low` | 1,000 – 5,000 |
-| `medium` | 5,000 – 15,000 |
-| `high` | 15,000 – 50,000 |
-| `xhigh` | 50,000 – 200,000+ (essentially uncapped) |
+| `none` / `low` | Latency-sensitive retrieval and routine tasks |
+| `medium` | Balanced default for coding, analysis, and planning |
+| `high` | Difficult debugging and complex workflows |
+| `xhigh` | Extended research and long-running hard problems |
+| `max` | Maximum single-agent reasoning for quality-first tasks |
 
-### Why `xhigh` often produces no output
+Pro is **not** a separate deployment and is **not** a reasoning effort. It is
+`reasoning.mode: "pro"` on the same `gpt-5.6-sol` deployment. Standard/Pro mode
+and effort can be selected independently, including Pro + `max`. Pro performs
+additional model work and can substantially increase latency and token usage.
+
+Sources: [Azure model limits](https://learn.microsoft.com/azure/foundry/openai/how-to/reasoning)
+and [OpenAI reasoning modes](https://developers.openai.com/api/docs/guides/reasoning#reasoning-mode).
+
+### Why `xhigh` can produce no output on `gpt-5.4-pro`
 
 With `max_output_tokens = 65,536` and a hard prompt:
 
@@ -132,11 +143,15 @@ With `max_output_tokens = 65,536` and a hard prompt:
 - Zero `output_text.delta` events ever arrive
 - UI shows the "No response" inline error
 
-**Rule of thumb:** stay on `high` for almost everything. Escalate to `xhigh` only when `high` is visibly under-thinking, and pair it with the slider maxed at 131,072. The Parameters panel surfaces a rose-tinted warning card when `xhigh` is selected.
+**Rule of thumb for 5.4 Pro:** stay on `high` for almost everything. Escalate to
+`xhigh` only when evaluations show a clear benefit, and leave enough of the
+128,000-token output budget for the visible answer.
 
 ### `gpt-5.4-pro` supported efforts
 
-This deployment **only accepts `medium` / `high` / `xhigh`** (not `minimal` / `low`). The `KNOWN_RESPONSES_MODELS` lookup in the Parameters panel enforces this — the segmented control hides the unsupported buttons for this model.
+This deployment **only accepts `medium` / `high` / `xhigh`**. The backend
+publishes per-deployment capabilities; the Parameters panel renders only the
+supported choices and does not offer Pro mode for 5.4 Pro.
 
 ## Reliability features
 
@@ -145,13 +160,15 @@ The chat path has multiple guard rails for long-running reasoning sessions:
 | Guard | Threshold | What it catches |
 |---|---|---|
 | `httpx.read` timeout | 30 min between chunks | Network/proxy stalls |
-| Stale-event watchdog | 5 min without any SSE event | Dead Azure-side request |
-| No-content watchdog | 20 min total elapsed with zero `output_text.delta` | Reasoning that never produces output |
+| Background-stream recovery | Premature SSE termination | Polls the stored response and delivers its completed output |
+| Background cancellation | Stop/watchdog | Explicitly cancels the Azure response before aborting local SSE |
+| Stale-event watchdog | 30 min without any SSE event | Dead Azure-side request |
+| No-content watchdog | 60 min total elapsed with zero `output_text.delta` | Reasoning that never produces output |
 | Empty-response guard | After `done` event with `assembled === ''` | Budget-exhausted reasoning |
 | User-facing **Stop** button | Manual | Escape hatch any time |
 | Inline error card with **Retry** | Persistent UI | No silent failures |
 
-All four automatic guards reset/skip on a healthy stream, so you don't lose legitimate long thoughts (~30-60 min reasoning is fine on `high`).
+All automatic guards reset/skip on a healthy stream, so you don't lose legitimate long thoughts (~30-60 min reasoning is fine on `high`).
 
 ## Troubleshooting
 
@@ -163,9 +180,9 @@ All four automatic guards reset/skip on a healthy stream, so you don't lose legi
 | `2025-01-01-preview` does not support Responses API | App calls `/openai/v1/*` directly (no api-version), so this only matters for older Chat Completions paths. |
 | Tokens don't stream live | Corporate proxy may buffer SSE; try a direct connection (FastAPI sends `X-Accel-Buffering: no`). |
 | Equations show as raw `$...$` | Hard-refresh — KaTeX CSS is bundled. |
-| "Model reasoned but produced no output" | Open Parameters → set Max Output Tokens to 131,072 and drop effort from `xhigh` to `high`. Then Retry. |
+| "Model reasoned but produced no output" | Open Parameters → set Max Output Tokens to 128,000 and lower the effort, then Retry. |
 | Browser stuck on old bundle after a deploy | Server sends `Cache-Control: no-cache` on HTML. If you somehow still see stale UI, hard-refresh once (Ctrl+Shift+R). |
-| Stream stuck for hours | Watchdogs auto-abort at 5/20 min; if you want sooner, click the ■ STOP button in the streaming bubble. |
+| Stream stuck for hours | Watchdogs auto-abort at 30/60 min; if you want sooner, click the ■ STOP button in the streaming bubble. |
 
 ## Environment variables
 
@@ -173,13 +190,17 @@ Copy `.env.example` → `.env` and tweak:
 
 ```
 AOAI_ENDPOINT=https://your-resource.openai.azure.com/
-AOAI_DEPLOYMENT=gpt-5.4-pro
+AOAI_DEPLOYMENT=gpt-5.6-sol
 AOAI_PORT=8765
 AOAI_HOST=127.0.0.1
 AOAI_OPEN_BROWSER=1
 AOAI_READ_TIMEOUT=1800       # httpx read between chunks (s)
 AOAI_CONNECT_TIMEOUT=15
 ```
+
+`ENDPOINT_URL` and `DEPLOYMENT_NAME` are accepted as aliases for compatibility
+with Microsoft Foundry sample code. The `AOAI_*` names take precedence when
+both forms are set.
 
 ## Plan
 
