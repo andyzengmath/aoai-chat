@@ -187,6 +187,22 @@ code, pre, kbd {
   );
 }
 
+/* Keep long Markdown/KaTeX histories mounted for search and accessibility,
+   while skipping style/layout/paint work for messages far outside the
+   viewport. The intrinsic sizes approximate this app's short prompts and
+   long research answers until Chromium records each message's actual size. */
+.conversation-message {
+  content-visibility: auto;
+}
+
+.conversation-message-user {
+  contain-intrinsic-size: auto 160px;
+}
+
+.conversation-message-assistant {
+  contain-intrinsic-size: auto 6400px;
+}
+
 /* Decorative diagonal hairline used in the header */
 .diagonal-rule {
   background-image: linear-gradient(

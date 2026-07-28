@@ -9,6 +9,7 @@ reliability, and UX stabilization work.
 |---|---|---|---|
 | Rendering performance | Typing, panels, and streamed responses felt globally laggy. | Large and frequently changing surfaces used `backdrop-filter`, forcing expensive compositing and repainting. | Replaced live backdrop sampling with static layered gradients, borders, highlights, and shadows. |
 | Conversation scrolling | Reaching the end of a long conversation could jump the viewport thousands of pixels upward. | React Virtuoso reapplied delayed initial positioning after variable-height Markdown had been measured. | Replaced the conflicting virtual scroll owner with native scrolling; pin on conversation load or an explicit send, and preserve upward reading position through assistant completion and later resizes. |
+| Long-chat rendering | Scrolling a long math conversation degraded to 50ms frame p95 with frequent long tasks. | Every offscreen Markdown and KaTeX subtree remained eligible for style, layout, and paint work (146K DOM nodes in the measured chat). | Keep messages mounted for accessibility while applying `content-visibility: auto` and role-specific intrinsic sizes to skip offscreen rendering work. |
 | Background streaming | High-effort requests could end with an empty-response card even though Azure continued processing. | Azure background + streaming can terminate SSE before a terminal response event. | Poll the stored response after premature stream termination and deliver the completed output. |
 | Missing streamed text | A response could complete with text in the final response object but no preceding text deltas. | The client relied exclusively on `response.output_text.delta` events. | Reconcile streamed text with final `output_text` and emit only the missing suffix. |
 | Output-budget truncation | `max_output_tokens` discarded useful partial output and forced the user to restart the expensive round. | Incomplete responses were treated as generic errors and their response IDs were not retained. | Persist the partial turn and usage, preserve its response ID, and offer a manual chained Continue action with a fresh budget. |
@@ -79,6 +80,8 @@ Observed results:
 - Scroll regression improved from jumps of up to 16,822px to 0px.
 - Upward user scroll remained unchanged during content resize and assistant
   completion.
+- Long-chat scroll frame p95 improved from 50ms to 16.8ms; repeated isolated
+  runs kept slow frames between 3.3% and 4.5%.
 - Performance figures are medians/percentiles from three randomized local
   browser trials:
   - streamed frame p95: 16.8ms

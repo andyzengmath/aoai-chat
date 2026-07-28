@@ -12,6 +12,7 @@ A lightweight, futuristic-looking ChatGPT-style client for Azure OpenAI — buil
 - **iOS 26 "Liquid Glass" UI** — translucent surfaces, deep black canvas, Onest typeface, cosmic accents
 - **Terminal-style history** — ↑ / ↓ in the input bar recall previous prompts
 - **Stable native scrolling** with bottom pinning for long, variable-height Markdown
+- **Offscreen message containment** keeps long Markdown/KaTeX histories responsive
 - **Two-port dev**, **one-port prod** — Vite proxy → FastAPI in dev, FastAPI serves built bundle in prod
 
 ## Prerequisites

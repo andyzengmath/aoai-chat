@@ -95,7 +95,14 @@ export function ChatPane() {
         >
           <div ref={contentRef}>
             {items.map((msg) => (
-              <div key={msg.id} className="px-6 py-2">
+              <div
+                key={msg.id}
+                className={`conversation-message px-6 py-2 ${
+                  msg.role === 'assistant'
+                    ? 'conversation-message-assistant'
+                    : 'conversation-message-user'
+                }`}
+              >
                 <div className="max-w-3xl mx-auto">
                   <MessageBubble msg={msg} />
                 </div>
