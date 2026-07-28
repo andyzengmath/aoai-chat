@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Brain, ChevronDown, ChevronRight, Clock, Square } from 'lucide-react'
+import { Brain, ChevronDown, ChevronRight, Clock, RotateCw, Square } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { PONDERING_PHRASES, pickPondering } from '../config/thinking'
@@ -168,6 +168,18 @@ export function StreamingBubble() {
             </span>
           )}
         </div>
+
+        {streaming.retrying && (
+          <div
+            className="mb-3 inline-flex items-center gap-1.5 rounded-md
+                       border border-amber-300/20 bg-amber-400/[0.07]
+                       px-2.5 py-1.5 text-[11px] font-mono text-amber-100/75"
+          >
+            <RotateCw size={11} className="animate-spin" />
+            Retrying {streaming.retrying.attempt}/{streaming.retrying.maxAttempts} in{' '}
+            {streaming.retrying.delaySeconds}s
+          </div>
+        )}
 
         {/* Reasoning summary — ChatGPT-style: only the latest ~5 lines are
             visible, with the top edge fading out. The full reasoning lives in

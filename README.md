@@ -165,6 +165,7 @@ The chat path has multiple guard rails for long-running reasoning sessions:
 |---|---|---|
 | `httpx.read` timeout | 30 min between chunks | Network/proxy stalls |
 | Background-stream recovery | Premature SSE termination | Polls the stored response and delivers its completed output |
+| Safe server-error retry | Terminal zero-output `server_error` | Retries twice in-stream after 2s/5s; never retries ambiguous create failures or partial output |
 | Background cancellation | Stop/watchdog | Explicitly cancels the Azure response before aborting local SSE |
 | Incomplete continuation | `max_output_tokens` | Saves partial output and response state, then offers a chained Continue action |
 | Stale-event watchdog | 30 min without any SSE event | Dead Azure-side request |

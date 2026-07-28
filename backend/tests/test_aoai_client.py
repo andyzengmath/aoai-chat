@@ -161,15 +161,25 @@ def _event(event_type, **kwargs):
     return SimpleNamespace(type=event_type, sequence_number=1, **kwargs)
 
 
-def _response(status, *, output_text="", usage=None, reason=None):
+def _response(
+    status,
+    *,
+    response_id="resp_background",
+    output_text="",
+    usage=None,
+    reason=None,
+    error=None,
+    output=None,
+):
     details = SimpleNamespace(reason=reason) if reason else None
     return SimpleNamespace(
-        id="resp_background",
+        id=response_id,
         status=status,
         output_text=output_text,
         usage=usage,
         incomplete_details=details,
-        error=None,
+        error=error,
+        output=[] if output is None else output,
     )
 
 
@@ -235,6 +245,422 @@ async def test_gpt56_pro_mode_and_max_effort_are_forwarded(monkeypatch):
     }
     assert responses.create_kwargs["background"] is True
     assert events[-1]["type"] == "done"
+
+
+class _SequencedResponses(_FakeResponses):
+    def __init__(self, attempts):
+        super().__init__([], [])
+        self.attempts = list(attempts)
+        self.create_calls = []
+
+    async def create(self, **kwargs):
+        self.create_calls.append(kwargs)
+        events = self.attempts.pop(0)
+
+        async def stream():
+            for event in events:
+                yield event
+
+        return stream()
+
+
+def _server_failure_events(attempt):
+    response_id = f"resp_failed_{attempt}"
+    failed = _response(
+        "failed",
+        response_id=response_id,
+        error=SimpleNamespace(
+            code="server_error",
+            message=f"transient failure {attempt}",
+        ),
+    )
+    return [
+        _event(
+            "response.created",
+            response=SimpleNamespace(id=response_id),
+        ),
+        _event("response.failed", response=failed),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_terminal_server_error_retries_then_completes(monkeypatch):
+    completed = _response(
+        "completed",
+        response_id="resp_completed",
+        output_text="OK",
+        usage={"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+    )
+    responses = _SequencedResponses(
+        [
+            _server_failure_events(1),
+            [
+                _event(
+                    "response.created",
+                    response=SimpleNamespace(id="resp_completed"),
+                ),
+                _event("response.output_text.delta", delta="OK"),
+                _event("response.completed", response=completed),
+            ],
+        ]
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    sleeps = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request)]
+
+    assert len(responses.create_calls) == 2
+    assert sleeps == [2.0]
+    assert [event["type"] for event in events] == [
+        "start",
+        "retrying",
+        "start",
+        "delta",
+        "done",
+    ]
+    assert events[1] == {
+        "type": "retrying",
+        "attempt": 2,
+        "max_attempts": 3,
+        "delay_seconds": 2.0,
+        "reason": "server_error",
+    }
+    assert events[-1]["response_id"] == "resp_completed"
+
+
+@pytest.mark.asyncio
+async def test_polled_terminal_server_error_retries_then_completes(
+    monkeypatch,
+):
+    request_error = APIConnectionError(
+        request=httpx.Request(
+            "GET",
+            "https://example.openai.azure.com/openai/v1/responses",
+        )
+    )
+    failed = _response(
+        "failed",
+        response_id="resp_failed_poll",
+        error=SimpleNamespace(
+            code="server_error",
+            message="transient polled failure",
+        ),
+    )
+    completed = _response(
+        "completed",
+        response_id="resp_completed_poll",
+        output_text="OK",
+        usage={"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+    )
+
+    class _PollingRetryResponses(_FakeResponses):
+        def __init__(self):
+            super().__init__([], [failed])
+            self.create_calls = 0
+
+        async def create(self, **kwargs):
+            self.create_calls += 1
+
+            async def first_stream():
+                yield _event(
+                    "response.created",
+                    response=SimpleNamespace(id="resp_failed_poll"),
+                )
+                raise request_error
+
+            async def second_stream():
+                yield _event(
+                    "response.created",
+                    response=SimpleNamespace(id="resp_completed_poll"),
+                )
+                yield _event("response.output_text.delta", delta="OK")
+                yield _event("response.completed", response=completed)
+
+            return first_stream() if self.create_calls == 1 else second_stream()
+
+    responses = _PollingRetryResponses()
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request)]
+
+    assert responses.create_calls == 2
+    assert responses.retrieve_calls == ["resp_failed_poll"]
+    assert [event["type"] for event in events] == [
+        "start",
+        "retrying",
+        "start",
+        "delta",
+        "done",
+    ]
+    assert events[-1]["response_id"] == "resp_completed_poll"
+
+
+@pytest.mark.asyncio
+async def test_terminal_server_error_stops_after_two_retries(monkeypatch):
+    responses = _SequencedResponses(
+        [
+            _server_failure_events(1),
+            _server_failure_events(2),
+            _server_failure_events(3),
+        ]
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    sleeps = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request)]
+
+    assert len(responses.create_calls) == 3
+    assert sleeps == [2.0, 5.0]
+    assert [event["type"] for event in events].count("retrying") == 2
+    assert events[-1] == {
+        "type": "error",
+        "error": "response_failed",
+        "message": "transient failure 3",
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_server_failure_is_not_retried(monkeypatch):
+    failed = _response(
+        "failed",
+        response_id="resp_filtered",
+        error=SimpleNamespace(
+            code="content_filter",
+            message="blocked",
+        ),
+    )
+    responses = _SequencedResponses(
+        [
+            [
+                _event(
+                    "response.created",
+                    response=SimpleNamespace(id="resp_filtered"),
+                ),
+                _event("response.failed", response=failed),
+            ],
+        ]
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request)]
+
+    assert len(responses.create_calls) == 1
+    assert all(event["type"] != "retrying" for event in events)
+    assert events[-1] == {
+        "type": "error",
+        "error": "content_filter",
+        "message": "blocked",
+    }
+
+
+@pytest.mark.asyncio
+async def test_server_error_after_visible_output_is_not_retried(monkeypatch):
+    failed = _response(
+        "failed",
+        response_id="resp_partial_failure",
+        error=SimpleNamespace(
+            code="server_error",
+            message="failed after output",
+        ),
+    )
+    responses = _SequencedResponses(
+        [
+            [
+                _event(
+                    "response.created",
+                    response=SimpleNamespace(id="resp_partial_failure"),
+                ),
+                _event("response.output_text.delta", delta="Partial"),
+                _event("response.failed", response=failed),
+            ],
+        ]
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request)]
+
+    assert len(responses.create_calls) == 1
+    assert [event["type"] for event in events] == [
+        "start",
+        "delta",
+        "error",
+    ]
+    assert events[-1]["error"] == "server_error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prior_event",
+    [
+        _event("response.reasoning_summary_text.delta", delta="Thinking"),
+        _event("response.output_text.done", text="Completed text"),
+        _event(
+            "response.reasoning_summary_text.done",
+            text="Completed reasoning",
+        ),
+        _event("response.refusal.delta", delta="I cannot"),
+        _event(
+            "response.function_call_arguments.delta",
+            delta='{"query":',
+        ),
+        _event(
+            "response.output_item.added",
+            item=SimpleNamespace(type="function_call"),
+        ),
+        None,
+    ],
+)
+async def test_server_error_after_any_model_work_is_not_retried(
+    monkeypatch,
+    prior_event,
+):
+    output = (
+        [SimpleNamespace(type="reasoning")]
+        if prior_event is None
+        else []
+    )
+    failed = _response(
+        "failed",
+        response_id="resp_work_failure",
+        error=SimpleNamespace(
+            code="server_error",
+            message="failed after model work",
+        ),
+        output=output,
+    )
+    events = [
+        _event(
+            "response.created",
+            response=SimpleNamespace(id="resp_work_failure"),
+        ),
+    ]
+    if prior_event is not None:
+        events.append(prior_event)
+    events.append(_event("response.failed", response=failed))
+    responses = _SequencedResponses([events])
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    result = [event async for event in _stream_responses(request)]
+
+    assert len(responses.create_calls) == 1
+    assert all(event["type"] != "retrying" for event in result)
+    assert result[-1]["error"] == "server_error"
+
+
+@pytest.mark.asyncio
+async def test_create_500_without_response_id_is_not_retried(monkeypatch):
+    request = httpx.Request(
+        "POST",
+        "https://example.openai.azure.com/openai/v1/responses",
+    )
+    create_error = APIStatusError(
+        "ambiguous create failure",
+        response=httpx.Response(500, request=request),
+        body={"error": {"message": "server error"}},
+    )
+
+    class _CreateFailureResponses(_FakeResponses):
+        def __init__(self):
+            super().__init__([], [])
+            self.create_calls = 0
+
+        async def create(self, **kwargs):
+            self.create_calls += 1
+            raise create_error
+
+    responses = _CreateFailureResponses()
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    request_body = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request_body)]
+
+    assert responses.create_calls == 1
+    assert all(event["type"] != "retrying" for event in events)
+    assert events[-1]["error"] == "responses_create_failed"
 
 
 @pytest.mark.asyncio

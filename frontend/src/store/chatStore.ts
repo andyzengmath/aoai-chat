@@ -53,6 +53,11 @@ interface StreamingState {
   lastEventAt: number
   backgroundCancellable: boolean
   fallback?: { from: string; to: string; reason: string }
+  retrying?: {
+    attempt: number
+    maxAttempts: number
+    delaySeconds: number
+  }
 }
 
 // Cap on the in-memory reasoning tail. ~3x what the UI shows, so brief
@@ -723,6 +728,32 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             lastEventAt: Date.now(),
             backgroundCancellable,
           })
+        } else if (evt.event === 'retrying') {
+          responseId = null
+          assembled = ''
+          reasoningTail = ''
+          reasoningCharsTotal = 0
+          firstContentSeen = false
+          set((s) =>
+            s.streaming
+              ? {
+                  streaming: {
+                    ...s.streaming,
+                    content: '',
+                    reasoning: '',
+                    reasoningCharsTotal: 0,
+                    responseId: null,
+                    backgroundCancellable: false,
+                    retrying: {
+                      attempt: evt.data?.attempt ?? 2,
+                      maxAttempts: evt.data?.max_attempts ?? 3,
+                      delaySeconds: evt.data?.delay_seconds ?? 0,
+                    },
+                    lastEventAt: Date.now(),
+                  },
+                }
+              : {},
+          )
         } else if (evt.event === 'fallback') {
           backgroundCancellable = false
           set((s) =>

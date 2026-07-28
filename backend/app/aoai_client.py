@@ -51,6 +51,7 @@ COMPACTION_THRESHOLD_TOKENS = 200_000
 BACKGROUND_POLL_INTERVAL_SECONDS = 2.0
 BACKGROUND_RETRIEVE_MAX_ATTEMPTS = 4
 BACKGROUND_RESPONSE_ID_WAIT_SECONDS = 60.0
+BACKGROUND_SERVER_ERROR_RETRY_DELAYS_SECONDS = (2.0, 5.0)
 
 # ---- httpx timeouts for the OpenAI streaming client -----------------------
 # httpx applies the `read` timeout *between* chunks — not as a total cap on
@@ -246,6 +247,45 @@ def _missing_output_text(final_text: str, streamed_text: str) -> str | None:
     return final_text[len(streamed_text):]
 
 
+def _response_failure_details(response: Any) -> tuple[str, str]:
+    error = getattr(response, "error", None)
+    code = getattr(error, "code", None) or "response_failed"
+    message = (
+        getattr(error, "message", None)
+        or str(error or "")
+        or "Response failed"
+    )
+    return code, message[:500]
+
+
+def _is_retryable_zero_work_server_error(response: Any) -> bool:
+    code, _ = _response_failure_details(response)
+    return (
+        getattr(response, "status", None) == "failed"
+        and code == "server_error"
+        and not (getattr(response, "output_text", "") or "")
+        and not (getattr(response, "output", None) or [])
+        and getattr(response, "usage", None) is None
+    )
+
+
+_NON_WORK_STREAM_EVENTS = {
+    "",
+    "error",
+    "keepalive",
+    "response.created",
+    "response.in_progress",
+    "response.queued",
+    "response.completed",
+    "response.failed",
+    "response.incomplete",
+}
+
+
+def _stream_event_indicates_model_work(event_type: str) -> bool:
+    return event_type not in _NON_WORK_STREAM_EVENTS
+
+
 def _is_transient_response_error(error: Exception) -> bool:
     if isinstance(error, (APIConnectionError, APITimeoutError, RateLimitError)):
         return True
@@ -334,6 +374,7 @@ async def _recover_background_response(
     client: AsyncOpenAI,
     response_id: str,
     streamed_text: str,
+    streamed_model_work_seen: bool = False,
 ) -> AsyncIterator[dict]:
     """Poll a background response after its SSE stream ends prematurely."""
     retrieve_failures = 0
@@ -434,6 +475,25 @@ async def _recover_background_response(
                 }
                 return
 
+            if status == "failed":
+                code, message = _response_failure_details(response)
+                if (
+                    _is_retryable_zero_work_server_error(response)
+                    and not streamed_text
+                    and not streamed_model_work_seen
+                ):
+                    yield {
+                        "type": "_retryable_server_error",
+                        "message": message,
+                    }
+                    return
+                yield {
+                    "type": "error",
+                    "error": code,
+                    "message": message,
+                }
+                return
+
             terminal_status = status or "unknown"
             yield {
                 "type": "error",
@@ -507,6 +567,44 @@ async def stream_response(req: ChatRequest) -> AsyncIterator[dict]:
 
 async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
     client = _make_client()
+    max_attempts = 1 + len(BACKGROUND_SERVER_ERROR_RETRY_DELAYS_SECONDS)
+    for attempt in range(1, max_attempts + 1):
+        retryable_failure: dict | None = None
+        attempt_events = _stream_responses_once(req, client)
+        try:
+            async for event in attempt_events:
+                if event.get("type") == "_retryable_server_error":
+                    retryable_failure = event
+                else:
+                    yield event
+        finally:
+            await attempt_events.aclose()
+
+        if retryable_failure is None:
+            return
+        if attempt >= max_attempts:
+            yield {
+                "type": "error",
+                "error": "response_failed",
+                "message": retryable_failure["message"],
+            }
+            return
+
+        delay = BACKGROUND_SERVER_ERROR_RETRY_DELAYS_SECONDS[attempt - 1]
+        yield {
+            "type": "retrying",
+            "attempt": attempt + 1,
+            "max_attempts": max_attempts,
+            "delay_seconds": delay,
+            "reason": "server_error",
+        }
+        await asyncio.sleep(delay)
+
+
+async def _stream_responses_once(
+    req: ChatRequest,
+    client: AsyncOpenAI,
+) -> AsyncIterator[dict]:
     kwargs: dict[str, Any] = {
         "model": req.deployment,
         "input": req.content,
@@ -624,9 +722,12 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
 
     usage: dict | None = None
     streamed_text_parts: list[str] = []
+    streamed_model_work_seen = False
     try:
         async for event in event_stream:
             ev_type = getattr(event, "type", "") or ""
+            if _stream_event_indicates_model_work(ev_type):
+                streamed_model_work_seen = True
             if ev_type == "response.created":
                 resp = getattr(event, "response", None)
                 response_id = getattr(resp, "id", None) if resp else None
@@ -752,24 +853,24 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
                 return
             elif ev_type == "response.failed":
                 resp = getattr(event, "response", None)
-                details = None
                 if resp is not None:
-                    details = (
-                        getattr(resp, "incomplete_details", None)
-                        or getattr(resp, "error", None)
-                    )
-                reason = ""
-                if details is not None:
-                    reason = (
-                        getattr(details, "reason", None)
-                        or getattr(details, "message", None)
-                        or str(details)
-                    ) or ""
-                status = ev_type.rsplit(".", 1)[-1]
+                    code, message = _response_failure_details(resp)
+                    if (
+                        _is_retryable_zero_work_server_error(resp)
+                        and not streamed_text_parts
+                        and not streamed_model_work_seen
+                    ):
+                        yield {
+                            "type": "_retryable_server_error",
+                            "message": message,
+                        }
+                        return
+                else:
+                    code, message = "response_failed", "Response failed"
                 yield {
                     "type": "error",
-                    "error": f"response_{status}",
-                    "message": (reason or f"Response {status}")[:500],
+                    "error": code,
+                    "message": message,
                 }
                 return
             elif ev_type == "error":
@@ -802,6 +903,7 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
                 client,
                 response_id,
                 "".join(streamed_text_parts),
+                streamed_model_work_seen,
             ):
                 yield event
             return
@@ -817,6 +919,7 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
             client,
             response_id,
             "".join(streamed_text_parts),
+            streamed_model_work_seen,
         ):
             yield event
         return
