@@ -57,6 +57,7 @@ async def chat(req: ChatRequest):
         assistant_buf: list[str] = []
         reasoning_buf: list[str] = []
         final_done: dict | None = None
+        final_incomplete: dict | None = None
         had_error = False
 
         # Prepend a 'meta' event with conversation_id + filename so the client
@@ -81,6 +82,8 @@ async def chat(req: ChatRequest):
                     reasoning_buf.append(event.get("text", ""))
                 elif t == "done":
                     final_done = event
+                elif t == "incomplete":
+                    final_incomplete = event
                 elif t == "error":
                     had_error = True
                 yield {
@@ -91,13 +94,14 @@ async def chat(req: ChatRequest):
             with anyio.CancelScope(shield=True):
                 await response_events.aclose()
 
-        if final_done and not had_error:
+        final_response = final_done or final_incomplete
+        if final_response and not had_error:
             transcript.append_turn(
                 user_text=req.content,
                 assistant_text="".join(assistant_buf),
                 deployment=req.deployment,
-                response_id=(final_done or {}).get("response_id"),
-                usage=(final_done or {}).get("usage"),
+                response_id=final_response.get("response_id"),
+                usage=final_response.get("usage"),
             )
             try:
                 transcript.write_atomic()
@@ -108,6 +112,9 @@ async def chat(req: ChatRequest):
                         "conversation_id": transcript.meta.id,
                         "filename": transcript.path.name,
                         "turn_count": transcript.meta.turn_count,
+                        "status": (
+                            "incomplete" if final_incomplete else "completed"
+                        ),
                     }),
                 }
             except Exception as e:  # noqa: BLE001

@@ -11,6 +11,7 @@ reliability, and UX stabilization work.
 | Conversation scrolling | Reaching the end of a long conversation could jump the viewport thousands of pixels upward. | React Virtuoso reapplied delayed initial positioning after variable-height Markdown had been measured. | Replaced the conflicting virtual scroll owner with native scrolling; pin on conversation load or an explicit send, and preserve upward reading position through assistant completion and later resizes. |
 | Background streaming | High-effort requests could end with an empty-response card even though Azure continued processing. | Azure background + streaming can terminate SSE before a terminal response event. | Poll the stored response after premature stream termination and deliver the completed output. |
 | Missing streamed text | A response could complete with text in the final response object but no preceding text deltas. | The client relied exclusively on `response.output_text.delta` events. | Reconcile streamed text with final `output_text` and emit only the missing suffix. |
+| Output-budget truncation | `max_output_tokens` discarded useful partial output and forced the user to restart the expensive round. | Incomplete responses were treated as generic errors and their response IDs were not retained. | Persist the partial turn and usage, preserve its response ID, and offer a manual chained Continue action with a fresh budget. |
 | Stream startup errors | Failure before the first SSE event escaped as an unstructured server error. | First-event acquisition happened outside the guarded stream iteration. | Convert first-event failures into structured SSE errors. |
 | Long-running authentication | Background polling could outlive the bearer token used to create the request. | The OpenAI client received a one-time token string. | Upgraded the OpenAI SDK and supplied an async refreshing Azure token provider for every HTTP request. |
 | Recovery resilience | One network, timeout, throttling, or transient Azure error abandoned recovery. | Retrieval had no bounded transient retry policy. | Retry connection errors, timeouts, HTTP 408/409/429, and 5xx responses up to four attempts; honor numeric `Retry-After` values up to 60 seconds; cancel on exhaustion. |
@@ -22,6 +23,7 @@ reliability, and UX stabilization work.
 | Chat fallback Stop | Stop could wait 30 seconds after Responses fell back to Chat Completions. | The request remained marked as background-cancellable despite having no response ID. | Downgrade cancellability on fallback or a Chat start event and abort locally immediately. |
 | GPT-5.6 support | The UI could not select `max` effort or Pro mode and duplicated model rules. | Capability knowledge was hardcoded separately in frontend and backend. | Added one backend-owned static capability map and separate effort/mode controls driven by the API contract. |
 | Output limits | The previous slider exceeded the documented 128,000-token maximum. | The UI used a generic 131,072 upper bound. | Clamp requests and controls to each deployment's documented limit in the backend capability map. |
+| Misleading max configuration | Pro + `max` could still run with the 32,768-token default output budget. | Reasoning effort and output budget are independent API controls. | Show the active budget constraint and provide a one-click **Use 128K** action without silently overriding explicit cost controls. |
 | Parameter persistence | Persisted Pro mode reset to Standard during application startup. | Validation ran before deployment metadata had loaded. | Defer model-specific coercion until the selected deployment is available. |
 
 ## GPT-5.6 Contract
@@ -72,6 +74,8 @@ Observed results:
 - Live Azure calls passed for Standard + `none`, Standard + `max`,
   Pro + `medium`, and Pro + `max`.
 - Live browser Stop returned Azure status `cancelled`.
+- A live forced-incomplete Azure response was saved and continued through
+  `previous_response_id` to a completed response without repeating text.
 - Scroll regression improved from jumps of up to 16,822px to 0px.
 - Upward user scroll remained unchanged during content resize and assistant
   completion.

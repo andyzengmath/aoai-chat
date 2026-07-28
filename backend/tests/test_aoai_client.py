@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import anyio
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from openai import APIConnectionError, APIStatusError
 
 import app.aoai_client as aoai_client
@@ -20,10 +21,12 @@ from app.aoai_client import (
     stream_response,
     supports_responses_api,
 )
+from app.main import app
 from app.routes import chat as chat_routes
 from app.routes import deployments as deployment_routes
 from app.schemas import ChatRequest
 from app.settings import DEFAULT_DEPLOYMENTS, effective_config
+from app.transcript import Transcript
 
 
 @pytest.mark.parametrize(
@@ -232,6 +235,158 @@ async def test_gpt56_pro_mode_and_max_effort_are_forwarded(monkeypatch):
     }
     assert responses.create_kwargs["background"] is True
     assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_incomplete_response_preserves_partial_output(monkeypatch):
+    incomplete_response = _response(
+        "incomplete",
+        output_text="Partial answer",
+        usage={
+            "input_tokens": 100,
+            "output_tokens": 32_768,
+            "total_tokens": 32_868,
+        },
+        reason="max_output_tokens",
+    )
+    responses = _FakeResponses(
+        stream_events=[
+            _event(
+                "response.created",
+                response=SimpleNamespace(id="resp_background"),
+            ),
+            _event("response.output_text.delta", delta="Partial "),
+            _event("response.incomplete", response=incomplete_response),
+        ],
+        retrieved_responses=[],
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request)]
+
+    assert "".join(
+        event.get("text", "")
+        for event in events
+        if event["type"] == "delta"
+    ) == "Partial answer"
+    assert events[-1] == {
+        "type": "incomplete",
+        "response_id": "resp_background",
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 32_768,
+            "total_tokens": 32_868,
+        },
+        "path": "responses",
+        "reason": "max_output_tokens",
+    }
+
+
+@pytest.mark.asyncio
+async def test_content_filter_incomplete_is_not_resumable(monkeypatch):
+    incomplete_response = _response(
+        "incomplete",
+        output_text="Filtered partial",
+        usage={"output_tokens": 12, "total_tokens": 20},
+        reason="content_filter",
+    )
+    responses = _FakeResponses(
+        stream_events=[
+            _event(
+                "response.created",
+                response=SimpleNamespace(id="resp_background"),
+            ),
+            _event("response.incomplete", response=incomplete_response),
+        ],
+        retrieved_responses=[],
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    request = ChatRequest(
+        deployment="gpt-5.6-sol",
+        content="test",
+        reasoning_effort="max",
+        reasoning_mode="pro",
+    )
+
+    events = [event async for event in _stream_responses(request)]
+
+    assert events[-1] == {
+        "type": "error",
+        "error": "response_incomplete",
+        "message": "content_filter",
+    }
+    assert all(event["type"] != "incomplete" for event in events)
+    assert all(event.get("text") != "Filtered partial" for event in events)
+
+
+def test_chat_route_saves_incomplete_partial_turn(monkeypatch, tmp_path):
+    transcript = Transcript.new(
+        save_dir=tmp_path,
+        first_user_msg="Solve this",
+        endpoint="https://example.openai.azure.com/",
+        deployment="gpt-5.6-sol",
+        conversation_id="conversation_incomplete",
+    )
+
+    async def fake_stream_response(_request):
+        yield {
+            "type": "start",
+            "response_id": "resp_incomplete",
+            "path": "responses",
+        }
+        yield {"type": "delta", "text": "Preserved partial answer"}
+        yield {
+            "type": "incomplete",
+            "response_id": "resp_incomplete",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 32_768,
+                "total_tokens": 32_868,
+            },
+            "path": "responses",
+            "reason": "max_output_tokens",
+        }
+
+    monkeypatch.setattr(
+        chat_routes,
+        "_open_or_create_transcript",
+        lambda _request: transcript,
+    )
+    monkeypatch.setattr(chat_routes, "stream_response", fake_stream_response)
+
+    response = TestClient(app).post(
+        "/api/chat",
+        json={
+            "deployment": "gpt-5.6-sol",
+            "content": "Solve this",
+            "reasoning_effort": "max",
+            "reasoning_mode": "pro",
+            "max_output_tokens": 32_768,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "event: incomplete" in response.text
+    assert "event: saved" in response.text
+    saved = Transcript.load(transcript.path)
+    assert saved.meta.turn_count == 1
+    assert saved.meta.response_id == "resp_incomplete"
+    assert saved.turns[-1].content == "Preserved partial answer"
+    assert saved.meta.usage_total["output_tokens"] == 32_768
 
 
 @pytest.mark.asyncio
@@ -743,9 +898,11 @@ async def test_background_recovery_surfaces_incomplete_status(monkeypatch):
     events = [event async for event in _stream_responses(request)]
 
     assert events[-1] == {
-        "type": "error",
-        "error": "response_incomplete",
-        "message": "max_output_tokens",
+        "type": "incomplete",
+        "response_id": "resp_background",
+        "usage": None,
+        "path": "responses",
+        "reason": "max_output_tokens",
     }
 
 

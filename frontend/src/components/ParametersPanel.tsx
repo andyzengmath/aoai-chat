@@ -288,6 +288,26 @@ export function ParametersPanel() {
                 </div>
               )}
 
+              {params.reasoningEffort === 'max' &&
+                params.maxOutputTokens < maxOutputTokens && (
+                  <div className="rounded-lg border border-rose-300/25 bg-rose-400/[0.07] px-3 py-2.5">
+                    <p className="text-[11px] text-rose-100/80 leading-relaxed">
+                      Max effort is limited to{' '}
+                      {params.maxOutputTokens.toLocaleString()} of{' '}
+                      {maxOutputTokens.toLocaleString()} output tokens.
+                    </p>
+                    <button
+                      onClick={() => setParams({ maxOutputTokens })}
+                      className="mt-2 rounded-md border border-rose-300/30
+                                 bg-rose-300/10 px-2.5 py-1 text-[11px]
+                                 font-medium text-rose-100 hover:bg-rose-300/20
+                                 transition-colors"
+                    >
+                      Use {formatTokenLimit(maxOutputTokens)}
+                    </button>
+                  </div>
+                )}
+
               {/* Max output tokens */}
               <section className="space-y-2">
                 <div className="flex items-center justify-between">

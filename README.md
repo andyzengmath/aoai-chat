@@ -128,6 +128,9 @@ Pro is **not** a separate deployment and is **not** a reasoning effort. It is
 `reasoning.mode: "pro"` on the same `gpt-5.6-sol` deployment. Standard/Pro mode
 and effort can be selected independently, including Pro + `max`. Pro performs
 additional model work and can substantially increase latency and token usage.
+Selecting `max` effort does not silently change `max_output_tokens`; when the
+configured budget is below the deployment limit, the Parameters panel shows
+the constraint and provides a one-click **Use 128K** action.
 
 Sources: [Azure model limits](https://learn.microsoft.com/azure/foundry/openai/how-to/reasoning)
 and [OpenAI reasoning modes](https://developers.openai.com/api/docs/guides/reasoning#reasoning-mode).
@@ -162,6 +165,7 @@ The chat path has multiple guard rails for long-running reasoning sessions:
 | `httpx.read` timeout | 30 min between chunks | Network/proxy stalls |
 | Background-stream recovery | Premature SSE termination | Polls the stored response and delivers its completed output |
 | Background cancellation | Stop/watchdog | Explicitly cancels the Azure response before aborting local SSE |
+| Incomplete continuation | `max_output_tokens` | Saves partial output and response state, then offers a chained Continue action |
 | Stale-event watchdog | 30 min without any SSE event | Dead Azure-side request |
 | No-content watchdog | 60 min total elapsed with zero `output_text.delta` | Reasoning that never produces output |
 | Empty-response guard | After `done` event with `assembled === ''` | Budget-exhausted reasoning |
@@ -180,7 +184,8 @@ All automatic guards reset/skip on a healthy stream, so you don't lose legitimat
 | `2025-01-01-preview` does not support Responses API | App calls `/openai/v1/*` directly (no api-version), so this only matters for older Chat Completions paths. |
 | Tokens don't stream live | Corporate proxy may buffer SSE; try a direct connection (FastAPI sends `X-Accel-Buffering: no`). |
 | Equations show as raw `$...$` | Hard-refresh — KaTeX CSS is bundled. |
-| "Model reasoned but produced no output" | Open Parameters → set Max Output Tokens to 128,000 and lower the effort, then Retry. |
+| "Response incomplete" / `max_output_tokens` | Use **Continue** for a fresh chained budget; optionally select **Use 128K** first. |
+| "Model reasoned but produced no output" | Open Parameters → select **Use 128K** or lower the effort, then Retry. |
 | Browser stuck on old bundle after a deploy | Server sends `Cache-Control: no-cache` on HTML. If you somehow still see stale UI, hard-refresh once (Ctrl+Shift+R). |
 | Stream stuck for hours | Watchdogs auto-abort at 30/60 min; if you want sooner, click the ■ STOP button in the streaming bubble. |
 

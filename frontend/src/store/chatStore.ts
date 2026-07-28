@@ -64,6 +64,21 @@ interface ToastState {
   message: string
 }
 
+type LastErrorState =
+  | {
+      kind: 'error'
+      message: string
+      retryPrompt: string
+    }
+  | {
+      kind: 'incomplete'
+      message: string
+      continuePrompt: string
+      conversationId: string | null
+      responseId: string
+      deployment: string
+    }
+
 export interface ChatParams {
   systemPrompt: string
   reasoningEffort: ReasoningEffort
@@ -142,7 +157,7 @@ export interface ChatStore {
   // and survives until the user retries, dismisses, or sends a new prompt
   // that streams content. Avoids the "toast auto-dismissed before I noticed"
   // failure mode.
-  lastError: { message: string; retryPrompt: string } | null
+  lastError: LastErrorState | null
 
   // actions
   bootstrap: () => Promise<void>
@@ -164,6 +179,7 @@ export interface ChatStore {
   setToast: (t: ToastState | null) => void
   clearLastError: () => void
   retryLastError: () => void
+  continueLastIncomplete: () => void
   stopStream: () => void
 }
 
@@ -294,7 +310,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
       return
     }
-    set({ activeId: null, activeMessages: [], activeLastResponseId: null, streaming: null })
+    set({
+      activeId: null,
+      activeMessages: [],
+      activeLastResponseId: null,
+      streaming: null,
+      lastError: null,
+    })
   },
 
   selectConversation: async (id) => {
@@ -314,6 +336,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         activeMessages: turnsToMessages(detail.turns),
         activeLastResponseId: detail.response_id,
         streaming: null,
+        lastError: null,
       })
     } catch (e) {
       set({ toast: { kind: 'error', message: `Load failed: ${(e as Error).message}` } })
@@ -340,7 +363,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  setDeployment: (name) => set({ selectedDeployment: name }),
+  setDeployment: (name) =>
+    set((state) => ({
+      selectedDeployment: name,
+      lastError:
+        state.lastError?.kind === 'incomplete' ? null : state.lastError,
+    })),
 
   openSettings: (open) => set({ settingsOpen: open }),
   openParameters: (open) => set({ parametersOpen: open }),
@@ -369,13 +397,35 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   clearLastError: () => set({ lastError: null }),
   retryLastError: () => {
     const err = get().lastError
-    if (!err) return
+    if (!err || err.kind !== 'error') return
     set({ lastError: null })
     // Re-run the same prompt but DON'T append a duplicate user bubble —
     // the original is already in `activeMessages`. Previous behaviour
     // ended up showing 3 copies of "Let's start from the very basic…"
     // after two Retry clicks.
     void get().sendMessage(err.retryPrompt, { skipUserMessage: true })
+  },
+  continueLastIncomplete: () => {
+    const err = get().lastError
+    if (!err || err.kind !== 'incomplete') return
+    const state = get()
+    if (
+      state.activeId !== err.conversationId
+      || state.activeLastResponseId !== err.responseId
+      || state.selectedDeployment !== err.deployment
+    ) {
+      set({
+        lastError: null,
+        toast: {
+          kind: 'error',
+          message:
+            'The incomplete response belongs to a different conversation or deployment.',
+        },
+      })
+      return
+    }
+    set({ lastError: null })
+    void get().sendMessage(err.continuePrompt)
   },
   stopStream: () => {
     const streaming = get().streaming
@@ -539,6 +589,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // stale watchdog can't see (because reasoning_delta events keep
     // resetting it).
     let responseId: string | null = null
+    let incomplete:
+      | {
+          reason: string
+          usage: { total_tokens?: number } | null
+        }
+      | null = null
     let watchdogReason: null | 'stale' | 'no_content' = null
     let firstContentSeen = false
     let staleTimer: ReturnType<typeof setTimeout> | null = null
@@ -689,6 +745,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         } else if (evt.event === 'done') {
           responseId = evt.data?.response_id ?? responseId
           path = evt.data?.path ?? path
+        } else if (evt.event === 'incomplete') {
+          responseId = evt.data?.response_id ?? responseId
+          path = evt.data?.path ?? path
+          incomplete = {
+            reason: evt.data?.reason || 'Response incomplete',
+            usage: evt.data?.usage ?? null,
+          }
         } else if (evt.event === 'saved') {
           await get().refreshConversations()
         } else if (evt.event === 'keepalive') {
@@ -711,6 +774,57 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // re-show the streaming bubble after the message commits.
       pendingStreaming = null
 
+      if (incomplete) {
+        const terminal = incomplete
+        if (!responseId) {
+          set({
+            streaming: null,
+            lastError: {
+              kind: 'error',
+              message:
+                'The response stopped without a response ID, so it cannot be continued safely.',
+              retryPrompt: content,
+            },
+          })
+          return
+        }
+        const incompleteResponseId = responseId
+        const partialAssistant: Message | null = assembled.trim()
+          ? {
+              id: newId(),
+              role: 'assistant',
+              content: assembled,
+              timestamp: new Date().toISOString(),
+              tokens: terminal.usage?.total_tokens ?? null,
+              deployment: selectedDeployment,
+              responseId: incompleteResponseId,
+              thinkingMs: Date.now() - startedAt,
+              reasoningChars: reasoningCharsTotal,
+              path,
+            }
+          : null
+        set((s) => ({
+          activeMessages: partialAssistant
+            ? [...s.activeMessages, partialAssistant]
+            : s.activeMessages,
+          activeLastResponseId: incompleteResponseId,
+          streaming: null,
+          lastError: {
+            kind: 'incomplete',
+            message:
+              terminal.reason === 'max_output_tokens'
+                ? 'The response used its full output-token budget. The partial answer was saved; continue with a fresh budget.'
+                : `The response stopped early (${terminal.reason}). The partial answer was saved.`,
+            continuePrompt:
+              'Continue exactly where you stopped. Do not repeat prior material.',
+            conversationId,
+            responseId: incompleteResponseId,
+            deployment: selectedDeployment,
+          },
+        }))
+        return
+      }
+
       // Empty-response guard. The Responses API can `completed` a stream
       // with zero output_text deltas (max-token cut-off, content filter,
       // model decided not to answer). Don't commit a ghost bubble; raise a
@@ -722,7 +836,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           : 'Empty response. The model may have been content-filtered, hit a token limit, or the connection closed early.'
         set({
           streaming: null,
-          lastError: { message: msg, retryPrompt: content },
+          lastError: { kind: 'error', message: msg, retryPrompt: content },
         })
         return
       }
@@ -759,6 +873,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         set({
           streaming: null,
           lastError: {
+            kind: 'error',
             message:
               `Stream stalled — no events for ${STALE_STREAM_TIMEOUT_MS / 60_000} min. ` +
               'The connection or Azure-side request hung. Retry to try again.',
@@ -769,6 +884,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         set({
           streaming: null,
           lastError: {
+            kind: 'error',
             message:
               `Model has been reasoning for ${NO_CONTENT_TIMEOUT_MS / 60_000} min without producing any output. ` +
               `This is the "runaway thinking" failure mode that hits gpt-5.4-pro on xhigh effort. ` +
@@ -782,7 +898,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const msg = e instanceof ApiError ? e.message : (e as Error).message
         set({
           streaming: null,
-          lastError: { message: msg, retryPrompt: content },
+          lastError: {
+            kind: 'error',
+            message: msg,
+            retryPrompt: content,
+          },
         })
       }
     } finally {

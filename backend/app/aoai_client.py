@@ -402,6 +402,38 @@ async def _recover_background_response(
                 }
                 return
 
+            if status == "incomplete":
+                reason = _response_error_message(response, status)[:500]
+                if reason != "max_output_tokens":
+                    yield {
+                        "type": "error",
+                        "error": "response_incomplete",
+                        "message": reason,
+                    }
+                    return
+                final_text = getattr(response, "output_text", "") or ""
+                missing_text = _missing_output_text(final_text, streamed_text)
+                if missing_text is None:
+                    yield {
+                        "type": "error",
+                        "error": "background_output_mismatch",
+                        "message": (
+                            "Recovered output did not match the partial stream. "
+                            "Retry the request."
+                        ),
+                    }
+                    return
+                if missing_text:
+                    yield {"type": "delta", "text": missing_text}
+                yield {
+                    "type": "incomplete",
+                    "response_id": response_id,
+                    "usage": _usage_dump(getattr(response, "usage", None)),
+                    "path": "responses",
+                    "reason": reason,
+                }
+                return
+
             terminal_status = status or "unknown"
             yield {
                 "type": "error",
@@ -624,13 +656,15 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
                     # cases output may be empty and the user sees a ghost
                     # bubble unless we surface it.
                     status = getattr(resp, "status", None)
-                    if status and status not in ("completed", None):
-                        yield {
-                            "type": "error",
-                            "error": f"response_{status}",
-                            "message": _response_error_message(resp, status)[:500],
-                        }
-                        return
+                    if status == "incomplete":
+                        reason = _response_error_message(resp, status)[:500]
+                        if reason != "max_output_tokens":
+                            yield {
+                                "type": "error",
+                                "error": "response_incomplete",
+                                "message": reason,
+                            }
+                            return
                     final_text = getattr(resp, "output_text", "") or ""
                     streamed_text = "".join(streamed_text_parts)
                     missing_text = _missing_output_text(final_text, streamed_text)
@@ -647,6 +681,22 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
                     if missing_text:
                         streamed_text_parts.append(missing_text)
                         yield {"type": "delta", "text": missing_text}
+                    if status == "incomplete":
+                        yield {
+                            "type": "incomplete",
+                            "response_id": response_id,
+                            "usage": usage,
+                            "path": "responses",
+                            "reason": reason,
+                        }
+                        return
+                    if status and status not in ("completed", None):
+                        yield {
+                            "type": "error",
+                            "error": f"response_{status}",
+                            "message": _response_error_message(resp, status)[:500],
+                        }
+                        return
                     if not final_text and not streamed_text:
                         yield {
                             "type": "error",
@@ -661,7 +711,46 @@ async def _stream_responses(req: ChatRequest) -> AsyncIterator[dict]:
                     "path": "responses",
                 }
                 return
-            elif ev_type in ("response.failed", "response.incomplete"):
+            elif ev_type == "response.incomplete":
+                resp = getattr(event, "response", None)
+                if resp is not None:
+                    response_id = response_id or getattr(resp, "id", None)
+                    usage = _usage_dump(getattr(resp, "usage", None))
+                    reason = _response_error_message(resp, "incomplete")[:500]
+                    if reason != "max_output_tokens":
+                        yield {
+                            "type": "error",
+                            "error": "response_incomplete",
+                            "message": reason,
+                        }
+                        return
+                    final_text = getattr(resp, "output_text", "") or ""
+                    streamed_text = "".join(streamed_text_parts)
+                    missing_text = _missing_output_text(final_text, streamed_text)
+                    if missing_text is None:
+                        yield {
+                            "type": "error",
+                            "error": "response_output_mismatch",
+                            "message": (
+                                "Incomplete output did not match the streamed text. "
+                                "Retry the request."
+                            ),
+                        }
+                        return
+                    if missing_text:
+                        streamed_text_parts.append(missing_text)
+                        yield {"type": "delta", "text": missing_text}
+                yield {
+                    "type": "incomplete",
+                    "response_id": response_id,
+                    "usage": usage,
+                    "path": "responses",
+                    "reason": (
+                        reason if resp is not None else "Response incomplete"
+                    ),
+                }
+                return
+            elif ev_type == "response.failed":
                 resp = getattr(event, "response", None)
                 details = None
                 if resp is not None:
