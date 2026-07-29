@@ -44,6 +44,7 @@ interface StreamingState {
   reasoning: string
   reasoningCharsTotal: number
   responseId: string | null
+  cancelToken: string | null
   path: 'responses' | 'chat' | null
   startedAt: number
   // Timestamp of the most recent stream event of any kind (start, delta,
@@ -224,14 +225,18 @@ let conversationLoadGeneration = 0
 
 function cancelRemoteResponse(
   responseId: string | null | undefined,
+  cancelToken: string | null | undefined,
   onError: (error: Error) => void,
 ) {
-  if (!responseId) return
-  void api.cancelResponse(responseId).catch((error: Error) => onError(error))
+  if (!responseId || !cancelToken) return
+  void api
+    .cancelResponse(responseId, cancelToken)
+    .catch((error: Error) => onError(error))
 }
 
 function requestCurrentStreamStop(
   responseId: string | null | undefined,
+  cancelToken: string | null | undefined,
   backgroundCancellable: boolean,
   onError: (error: Error) => void,
 ) {
@@ -240,8 +245,12 @@ function requestCurrentStreamStop(
     currentAbortController?.abort()
     return
   }
+  if (responseId && cancelToken) {
+    cancelRemoteResponse(responseId, cancelToken, onError)
+    currentAbortController?.abort()
+    return
+  }
   if (responseId) {
-    cancelRemoteResponse(responseId, onError)
     currentAbortController?.abort()
     return
   }
@@ -499,6 +508,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const streaming = get().streaming
     requestCurrentStreamStop(
       streaming?.responseId,
+      streaming?.cancelToken,
       streaming?.backgroundCancellable ?? false,
       (error) => {
         set({
@@ -597,6 +607,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           reasoning: '',
           reasoningCharsTotal: 0,
           responseId: null,
+          cancelToken: null,
           path: null,
           startedAt,
           lastEventAt: startedAt,
@@ -622,6 +633,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           reasoning: '',
           reasoningCharsTotal: 0,
           responseId: null,
+          cancelToken: null,
           path: null,
           startedAt,
           lastEventAt: startedAt,
@@ -669,6 +681,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // stale watchdog can't see (because reasoning_delta events keep
     // resetting it).
     let responseId: string | null = null
+    let cancelToken: string | null = null
     let incomplete:
       | {
           reason: string
@@ -683,14 +696,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       if (staleTimer) clearTimeout(staleTimer)
       staleTimer = setTimeout(() => {
         watchdogReason = 'stale'
-        requestCurrentStreamStop(responseId, backgroundCancellable, (error) => {
+        requestCurrentStreamStop(
+          responseId,
+          cancelToken,
+          backgroundCancellable,
+          (error) => {
           set({
             toast: {
               kind: 'error',
               message: `Azure cancellation failed after stream stall: ${error.message}`,
             },
           })
-        })
+          },
+        )
       }, STALE_STREAM_TIMEOUT_MS)
     }
 
@@ -716,14 +734,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       noContentTimer = setTimeout(() => {
         if (!firstContentSeen) {
           watchdogReason = 'no_content'
-          requestCurrentStreamStop(responseId, backgroundCancellable, (error) => {
+          requestCurrentStreamStop(
+            responseId,
+            cancelToken,
+            backgroundCancellable,
+            (error) => {
             set({
               toast: {
                 kind: 'error',
                 message: `Azure cancellation failed after reasoning timeout: ${error.message}`,
               },
             })
-          })
+            },
+          )
         }
       }, NO_CONTENT_TIMEOUT_MS)
 
@@ -743,13 +766,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           set({ activeId: conversationId })
         } else if (evt.event === 'start') {
           responseId = evt.data?.response_id ?? null
+          cancelToken = evt.data?.cancel_token ?? null
           path = evt.data?.path ?? null
           if (path === 'chat') backgroundCancellable = false
           if (currentStopRequested) {
             if (currentStopGraceTimer) clearTimeout(currentStopGraceTimer)
             currentStopGraceTimer = null
             if (backgroundCancellable) {
-              cancelRemoteResponse(responseId, (error) => {
+              cancelRemoteResponse(responseId, cancelToken, (error) => {
                 set({
                   toast: {
                     kind: 'error',
@@ -769,6 +793,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               reasoning: reasoningTail,
               reasoningCharsTotal,
               responseId,
+              cancelToken,
               path,
               startedAt,
               lastEventAt: Date.now(),
@@ -783,6 +808,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             reasoning: reasoningTail,
             reasoningCharsTotal,
             responseId,
+            cancelToken,
             path,
             startedAt,
             lastEventAt: Date.now(),
@@ -798,6 +824,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             reasoning: reasoningTail,
             reasoningCharsTotal,
             responseId,
+            cancelToken,
             path,
             startedAt,
             lastEventAt: Date.now(),
@@ -805,6 +832,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           })
         } else if (evt.event === 'retrying') {
           responseId = null
+          cancelToken = null
           assembled = ''
           reasoningTail = ''
           reasoningCharsTotal = 0
@@ -818,6 +846,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     reasoning: '',
                     reasoningCharsTotal: 0,
                     responseId: null,
+                    cancelToken: null,
                     backgroundCancellable: false,
                     retrying: {
                       attempt: evt.data?.attempt ?? 2,
@@ -831,11 +860,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           )
         } else if (evt.event === 'fallback') {
           backgroundCancellable = false
+          cancelToken = null
           set((s) =>
             s.streaming
               ? {
                   streaming: {
                     ...s.streaming,
+                    cancelToken: null,
                     backgroundCancellable: false,
                     fallback: evt.data,
                     lastEventAt: Date.now(),

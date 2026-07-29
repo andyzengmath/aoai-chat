@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import anyio
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from openai import APIConnectionError, APIStatusError
 
 import app.aoai_client as aoai_client
+import app.settings as app_settings
 from app.aoai_client import (
     KNOWN_RESPONSES_MODELS,
     KNOWN_RESPONSES_PREFIXES,
@@ -25,9 +28,14 @@ from app.aoai_client import (
 )
 from app.main import app
 from app.routes import chat as chat_routes
+from app.routes import config as config_routes
 from app.routes import deployments as deployment_routes
 from app.schemas import ChatRequest
-from app.settings import DEFAULT_DEPLOYMENTS, effective_config
+from app.settings import (
+    DEFAULT_DEPLOYMENTS,
+    PersistedConfig,
+    effective_config,
+)
 from app.transcript import Transcript
 
 
@@ -138,6 +146,95 @@ def test_foundry_sample_environment_names_are_supported(monkeypatch):
 
     assert config.endpoint == "https://sample.openai.azure.com/"
     assert config.default_deployment == "gpt-5.6-sol"
+
+
+def test_environment_default_is_included_in_known_deployments(monkeypatch):
+    monkeypatch.setattr(
+        app_settings,
+        "load_persisted",
+        lambda: PersistedConfig(known_deployments=["gpt-5.6-sol"]),
+    )
+    monkeypatch.setenv("AOAI_DEPLOYMENT", "custom-production-deployment")
+    monkeypatch.delenv("DEPLOYMENT_NAME", raising=False)
+
+    config = app_settings.effective_config()
+
+    assert config.default_deployment == "custom-production-deployment"
+    assert config.known_deployments[0] == "custom-production-deployment"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://example.openai.azure.com/",
+        "https://attacker.example.com/",
+        "https://example.openai.azure.com.attacker.example/",
+        "https://user@example.openai.azure.com/",
+    ],
+)
+def test_untrusted_azure_endpoint_is_rejected(endpoint):
+    with pytest.raises(ValueError):
+        app_settings.validate_azure_endpoint(endpoint)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://example.openai.azure.com/",
+        "https://example.services.ai.azure.com",
+        "https://example.cognitiveservices.azure.com:443/",
+    ],
+)
+def test_official_azure_endpoint_is_accepted(endpoint):
+    assert app_settings.validate_azure_endpoint(endpoint).endswith("/")
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "https://management.azure.com/.default",
+        "https://attacker.example/.default",
+    ],
+)
+def test_untrusted_token_scope_is_rejected(scope):
+    with pytest.raises(ValueError):
+        app_settings.validate_token_scope(scope)
+
+
+@pytest.mark.asyncio
+async def test_config_update_rejects_untrusted_token_destination(monkeypatch):
+    monkeypatch.setattr(
+        config_routes,
+        "load_persisted",
+        lambda: PersistedConfig(),
+    )
+    saved = []
+    monkeypatch.setattr(config_routes, "save_persisted", saved.append)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await config_routes.put_config(
+            config_routes.ConfigUpdate(
+                endpoint="https://attacker.example/",
+                token_scope="https://attacker.example/.default",
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert saved == []
+
+
+def test_make_client_rejects_untrusted_runtime_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        aoai_client,
+        "effective_config",
+        lambda: SimpleNamespace(
+            endpoint="https://attacker.example/",
+            token_scope="",
+        ),
+    )
+
+    with pytest.raises(ValueError):
+        _make_client()
 
 
 class _FakeResponses:
@@ -992,6 +1089,36 @@ async def test_background_cancel_cleanup_has_short_deadline(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_explicit_cancel_has_short_deadline(monkeypatch):
+    class SlowResponses:
+        def __init__(self):
+            self.finished = False
+
+        async def cancel(self, _response_id):
+            await anyio.sleep(0.2)
+            self.finished = True
+
+    responses = SlowResponses()
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "BACKGROUND_CANCEL_TIMEOUT_SECONDS",
+        0.01,
+    )
+    started = anyio.current_time()
+
+    with pytest.raises(TimeoutError):
+        await aoai_client.cancel_response("resp_slow_cancel")
+
+    assert anyio.current_time() - started < 0.1
+    assert responses.finished is False
+
+
+@pytest.mark.asyncio
 async def test_background_recovery_retries_transient_retrieve_errors(monkeypatch):
     responses = _FakeResponses(
         stream_events=[
@@ -1333,12 +1460,34 @@ async def test_first_background_stream_failure_emits_structured_error(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_cancel_route_cancels_response_by_id(monkeypatch):
+async def test_cancel_route_requires_stream_capability_token(
+    monkeypatch,
+    tmp_path,
+):
     calls = []
+    transcript = Transcript.new(
+        save_dir=tmp_path,
+        first_user_msg="Cancel this",
+        endpoint="https://example.openai.azure.com/",
+        deployment="gpt-5.6-sol",
+        conversation_id="conversation_cancel",
+    )
 
     async def fake_cancel(response_id):
         calls.append(response_id)
         return {"response_id": response_id, "status": "cancelled"}
+
+    async def fake_stream_response(_request):
+        yield {
+            "type": "start",
+            "response_id": "resp_test123",
+            "path": "responses",
+        }
+        await anyio.sleep_forever()
+
+    class CapturedEventSource:
+        def __init__(self, body_iterator, **_kwargs):
+            self.body_iterator = body_iterator
 
     monkeypatch.setattr(
         chat_routes,
@@ -1346,8 +1495,35 @@ async def test_cancel_route_cancels_response_by_id(monkeypatch):
         fake_cancel,
         raising=False,
     )
+    monkeypatch.setattr(
+        chat_routes,
+        "_open_or_create_transcript",
+        lambda _request: transcript,
+    )
+    monkeypatch.setattr(chat_routes, "stream_response", fake_stream_response)
+    monkeypatch.setattr(chat_routes, "EventSourceResponse", CapturedEventSource)
 
-    result = await chat_routes.cancel_response("resp_test123")
+    response = await chat_routes.chat(
+        ChatRequest(deployment="gpt-5.6-sol", content="Cancel this")
+    )
+    assert (await anext(response.body_iterator))["event"] == "meta"
+    start = await anext(response.body_iterator)
+    start_data = json.loads(start["data"])
+    cancel_token = start_data["cancel_token"]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await chat_routes.cancel_response(
+            "resp_test123",
+            chat_routes.CancelResponseRequest(cancel_token="x" * 43),
+        )
+    assert exc_info.value.status_code == 404
+    assert calls == []
+
+    result = await chat_routes.cancel_response(
+        "resp_test123",
+        chat_routes.CancelResponseRequest(cancel_token=cancel_token),
+    )
+    await response.body_iterator.aclose()
 
     assert calls == ["resp_test123"]
     assert result == {

@@ -35,7 +35,11 @@ from openai import (
 )
 
 from app.schemas import ChatRequest
-from app.settings import effective_config, normalize_endpoint
+from app.settings import (
+    effective_config,
+    validate_azure_endpoint,
+    validate_token_scope,
+)
 
 log = logging.getLogger(__name__)
 
@@ -194,8 +198,9 @@ def _make_client() -> AsyncOpenAI:
     from app.auth import make_token_provider
 
     cfg = effective_config()
-    endpoint = normalize_endpoint(cfg.endpoint)
-    azure_token_provider = make_token_provider(cfg.token_scope or None)
+    endpoint = validate_azure_endpoint(cfg.endpoint)
+    token_scope = validate_token_scope(cfg.token_scope)
+    azure_token_provider = make_token_provider(token_scope or None)
 
     async def token_provider() -> str:
         return await asyncio.to_thread(azure_token_provider)
@@ -349,7 +354,8 @@ async def _cancel_background_response(
 
 async def cancel_response(response_id: str) -> dict[str, str]:
     client = _make_client()
-    response = await client.responses.cancel(response_id)
+    with anyio.fail_after(BACKGROUND_CANCEL_TIMEOUT_SECONDS):
+        response = await client.responses.cancel(response_id)
     return {
         "response_id": getattr(response, "id", response_id),
         "status": getattr(response, "status", "cancelled"),

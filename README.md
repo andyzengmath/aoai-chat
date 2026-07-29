@@ -62,7 +62,7 @@ backend/            FastAPI + azure-identity + openai SDK
       deployments.py
       chat.py        SSE stream
       conversations.py
-  tests/            pytest (29 cases)
+  tests/            pytest (92 cases)
 frontend/           React + Vite + TS + Tailwind v4
   src/
     api/            client + SSE consumer
@@ -145,7 +145,8 @@ With `max_output_tokens = 65,536` and a hard prompt:
 - For long markdown / LaTeX responses, that's not enough
 - The model hits the cap mid-reasoning → `response.completed` fires with `status: "incomplete"`
 - Zero `output_text.delta` events ever arrive
-- UI shows the "No response" inline error
+- The app saves the response ID and any partial output, then shows
+  **Response incomplete** with a resumable **Continue** action
 
 **Rule of thumb for 5.4 Pro:** stay on `high` for almost everything. Escalate to
 `xhigh` only when evaluations show a clear benefit, and leave enough of the
@@ -166,11 +167,11 @@ The chat path has multiple guard rails for long-running reasoning sessions:
 | `httpx.read` timeout | 30 min between chunks | Network/proxy stalls |
 | Background-stream recovery | Premature SSE termination | Polls the stored response and delivers its completed output |
 | Safe server-error retry | Terminal zero-output `server_error` | Retries twice in-stream after 2s/5s; never retries ambiguous create failures or partial output |
-| Background cancellation | Stop/watchdog | Explicitly cancels the Azure response before aborting local SSE |
-| Incomplete continuation | `max_output_tokens` | Saves partial output and response state, then offers a chained Continue action |
+| Background cancellation | Stop/watchdog | Uses a per-stream cancellation grant to cancel the Azure response before aborting local SSE |
+| Incomplete continuation | `max_output_tokens` | Saves partial output and response state, restores it after reload, then offers a chained Continue action |
 | Stale-event watchdog | 30 min without any SSE event | Dead Azure-side request |
 | No-content watchdog | 60 min total elapsed with zero `output_text.delta` | Reasoning that never produces output |
-| Empty-response guard | After `done` event with `assembled === ''` | Budget-exhausted reasoning |
+| Empty-response guard | After `done` with no visible output | Unexpected empty completions |
 | User-facing **Stop** button | Manual | Escape hatch any time |
 | Inline error card with **Retry** | Persistent UI | No silent failures |
 
@@ -203,11 +204,17 @@ AOAI_HOST=127.0.0.1
 AOAI_OPEN_BROWSER=1
 AOAI_READ_TIMEOUT=1800       # httpx read between chunks (s)
 AOAI_CONNECT_TIMEOUT=15
+AOAI_CANCEL_TIMEOUT=10       # bounded remote cleanup (s)
 ```
 
 `ENDPOINT_URL` and `DEPLOYMENT_NAME` are accepted as aliases for compatibility
 with Microsoft Foundry sample code. The `AOAI_*` names take precedence when
 both forms are set.
+
+Endpoints must use HTTPS and an official Azure OpenAI/AI Services hostname.
+`AOAI_TOKEN_SCOPE` may be left empty for automatic selection or set to
+`https://ai.azure.com/.default` or
+`https://cognitiveservices.azure.com/.default`.
 
 ## Plan
 

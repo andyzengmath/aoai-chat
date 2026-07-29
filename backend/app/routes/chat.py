@@ -13,10 +13,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import secrets
+import time
 
 import anyio
 from fastapi import APIRouter, HTTPException
 from openai import APIConnectionError, APIStatusError, APITimeoutError
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from app.aoai_client import (
@@ -32,6 +35,58 @@ from app.transcript import Transcript, find_by_id
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 _RESPONSE_ID_RE = re.compile(r"^resp_[A-Za-z0-9_-]{1,200}$")
+_CANCEL_GRANT_TTL_SECONDS = 15 * 60
+_cancel_grants: dict[str, tuple[str, float]] = {}
+
+
+class CancelResponseRequest(BaseModel):
+    cancel_token: str = Field(min_length=32, max_length=256)
+
+
+def _prune_cancel_grants(now: float) -> None:
+    expired = [
+        response_id
+        for response_id, (_, expires_at) in _cancel_grants.items()
+        if expires_at <= now
+    ]
+    for response_id in expired:
+        _cancel_grants.pop(response_id, None)
+
+
+def _issue_cancel_grant(response_id: str) -> str:
+    now = time.monotonic()
+    _prune_cancel_grants(now)
+    token = secrets.token_urlsafe(32)
+    _cancel_grants[response_id] = (
+        token,
+        now + _CANCEL_GRANT_TTL_SECONDS,
+    )
+    return token
+
+
+def _claim_cancel_grant(
+    response_id: str,
+    token: str,
+) -> tuple[str, float] | None:
+    now = time.monotonic()
+    _prune_cancel_grants(now)
+    grant = _cancel_grants.get(response_id)
+    if grant is None or not secrets.compare_digest(grant[0], token):
+        return None
+    return _cancel_grants.pop(response_id)
+
+
+def _restore_cancel_grant(
+    response_id: str,
+    grant: tuple[str, float],
+) -> None:
+    if grant[1] > time.monotonic():
+        _cancel_grants[response_id] = grant
+
+
+def _revoke_cancel_grant(response_id: str | None) -> None:
+    if response_id:
+        _cancel_grants.pop(response_id, None)
 
 
 def _open_or_create_transcript(req: ChatRequest) -> Transcript:
@@ -58,6 +113,7 @@ async def chat(req: ChatRequest):
         reasoning_buf: list[str] = []
         final_done: dict | None = None
         final_incomplete: dict | None = None
+        active_response_id: str | None = None
         had_error = False
 
         # Prepend a 'meta' event with conversation_id + filename so the client
@@ -80,6 +136,21 @@ async def chat(req: ChatRequest):
                     assistant_buf.append(event.get("text", ""))
                 elif t == "reasoning_delta":
                     reasoning_buf.append(event.get("text", ""))
+                elif t == "start":
+                    response_id = event.get("response_id")
+                    if (
+                        isinstance(response_id, str)
+                        and _RESPONSE_ID_RE.fullmatch(response_id)
+                    ):
+                        _revoke_cancel_grant(active_response_id)
+                        active_response_id = response_id
+                        event = {
+                            **event,
+                            "cancel_token": _issue_cancel_grant(response_id),
+                        }
+                elif t in {"retrying", "fallback"}:
+                    _revoke_cancel_grant(active_response_id)
+                    active_response_id = None
                 elif t == "done":
                     final_done = event
                     continue
@@ -88,6 +159,8 @@ async def chat(req: ChatRequest):
                     continue
                 elif t == "error":
                     had_error = True
+                    _revoke_cancel_grant(active_response_id)
+                    active_response_id = None
                 yield {
                     "event": t or "message",
                     "data": json.dumps(event, default=str),
@@ -98,6 +171,7 @@ async def chat(req: ChatRequest):
 
         final_response = final_done or final_incomplete
         if final_response and not had_error:
+            _revoke_cancel_grant(active_response_id)
             transcript.append_turn(
                 user_text=req.content,
                 assistant_text="".join(assistant_buf),
@@ -153,15 +227,29 @@ async def chat(req: ChatRequest):
 
 
 @router.post("/responses/{response_id}/cancel")
-async def cancel_response(response_id: str) -> dict[str, str]:
+async def cancel_response(
+    response_id: str,
+    body: CancelResponseRequest,
+) -> dict[str, str]:
     if not _RESPONSE_ID_RE.fullmatch(response_id):
         raise HTTPException(400, "invalid response ID")
+    grant = _claim_cancel_grant(response_id, body.cancel_token)
+    if grant is None:
+        raise HTTPException(404, "response cancellation grant not found")
     try:
         return await cancel_aoai_response(response_id)
     except APIStatusError as e:
+        _restore_cancel_grant(response_id, grant)
         raise HTTPException(
             e.status_code,
             f"Azure response cancellation failed ({e.status_code})",
         ) from e
     except (APIConnectionError, APITimeoutError) as e:
+        _restore_cancel_grant(response_id, grant)
         raise HTTPException(502, "Azure response cancellation unavailable") from e
+    except TimeoutError as e:
+        _restore_cancel_grant(response_id, grant)
+        raise HTTPException(504, "Azure response cancellation timed out") from e
+    except Exception:
+        _restore_cancel_grant(response_id, grant)
+        raise

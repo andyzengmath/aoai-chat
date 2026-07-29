@@ -96,10 +96,14 @@ export const api = {
       '/api/config/test-auth',
       { method: 'POST' },
     ),
-  cancelResponse: (responseId: string) =>
+  cancelResponse: (responseId: string, cancelToken: string) =>
     jfetch<{ response_id: string; status: string }>(
       `/api/responses/${encodeURIComponent(responseId)}/cancel`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancel_token: cancelToken }),
+      },
     ),
 
   listDeployments: () => jfetch<DeploymentsResponse>('/api/deployments'),
