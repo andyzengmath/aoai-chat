@@ -37,7 +37,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,12 +50,19 @@ TURN_SEPARATOR = "\n\n---\n\n"
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _filename_for(first_user_msg: str, created_at: str) -> str:
-    slug = slugify(first_user_msg, max_length=48, word_boundary=True, save_order=True) or "conversation"
-    ts = created_at.replace(":", "").replace("-", "")[:15]  # YYYYMMDDTHHMMSS-ish
+    slug = (
+        slugify(
+            first_user_msg,
+            max_length=48,
+            word_boundary=True,
+            save_order=True,
+        )
+        or "conversation"
+    )
     # Prefer a friendlier date prefix: 2026-05-20_143015
     dt = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
     prefix = dt.strftime("%Y-%m-%d_%H%M%S")
@@ -71,6 +78,8 @@ class Turn:
     deployment: str | None = None
     response_id: str | None = None
     tokens: int | None = None
+    response_status: str | None = None
+    incomplete_reason: str | None = None
 
 
 @dataclass
@@ -82,6 +91,9 @@ class TranscriptMeta:
     endpoint: str
     deployment: str
     response_id: str | None = None
+    response_status: str | None = None
+    incomplete_reason: str | None = None
+    response_deployment: str | None = None
     turn_count: int = 0
     usage_total: dict[str, int] = field(default_factory=dict)
 
@@ -100,7 +112,7 @@ class Transcript:
         endpoint: str,
         deployment: str,
         conversation_id: str | None = None,
-    ) -> "Transcript":
+    ) -> Transcript:
         now = _utcnow_iso()
         cid = conversation_id or uuid.uuid4().hex
         title = (first_user_msg or "").strip().splitlines()[0][:80] or "untitled"
@@ -122,6 +134,8 @@ class Transcript:
         deployment: str,
         response_id: str | None,
         usage: dict[str, Any] | None,
+        response_status: str = "completed",
+        incomplete_reason: str | None = None,
     ) -> None:
         now = _utcnow_iso()
         self.turns.append(Turn(role="user", content=user_text, timestamp=now))
@@ -134,10 +148,15 @@ class Transcript:
                 deployment=deployment,
                 response_id=response_id,
                 tokens=int(total) if isinstance(total, int) else None,
+                response_status=response_status,
+                incomplete_reason=incomplete_reason,
             )
         )
         self.meta.updated_at = now
         self.meta.response_id = response_id or self.meta.response_id
+        self.meta.response_status = response_status
+        self.meta.incomplete_reason = incomplete_reason
+        self.meta.response_deployment = deployment
         self.meta.turn_count += 1
         if isinstance(usage, dict):
             for k in ("input_tokens", "output_tokens", "total_tokens"):
@@ -168,6 +187,17 @@ class Transcript:
 
     def write_atomic(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        turn_metadata = [
+            {
+                "deployment": turn.deployment,
+                "response_id": turn.response_id,
+                "tokens": turn.tokens,
+                "response_status": turn.response_status,
+                "incomplete_reason": turn.incomplete_reason,
+            }
+            for turn in self.turns
+            if turn.role == "assistant"
+        ]
         meta_dict = {
             "id": self.meta.id,
             "title": self.meta.title,
@@ -176,8 +206,12 @@ class Transcript:
             "endpoint": self.meta.endpoint,
             "deployment": self.meta.deployment,
             "response_id": self.meta.response_id,
+            "response_status": self.meta.response_status,
+            "incomplete_reason": self.meta.incomplete_reason,
+            "response_deployment": self.meta.response_deployment,
             "turn_count": self.meta.turn_count,
             "usage_total": dict(self.meta.usage_total),
+            "turn_metadata": turn_metadata,
         }
         post = frontmatter.Post(self._serialize_body(), **meta_dict)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -185,7 +219,7 @@ class Transcript:
         tmp.replace(self.path)
 
     @classmethod
-    def load(cls, path: Path) -> "Transcript":
+    def load(cls, path: Path) -> Transcript:
         post = frontmatter.load(str(path))
         m = post.metadata
         meta = TranscriptMeta(
@@ -196,10 +230,40 @@ class Transcript:
             endpoint=str(m.get("endpoint", "")),
             deployment=str(m.get("deployment", "")),
             response_id=m.get("response_id"),
+            response_status=m.get("response_status"),
+            incomplete_reason=m.get("incomplete_reason"),
+            response_deployment=m.get("response_deployment"),
             turn_count=int(m.get("turn_count", 0) or 0),
             usage_total=dict(m.get("usage_total") or {}),
         )
-        return cls(path=path, meta=meta, turns=_parse_body(post.content))
+        turns = _parse_body(post.content)
+        assistant_metadata = iter(m.get("turn_metadata") or [])
+        for turn in turns:
+            if turn.role != "assistant":
+                continue
+            raw = next(assistant_metadata, None)
+            if not isinstance(raw, dict):
+                continue
+            turn.deployment = raw.get("deployment") or turn.deployment
+            turn.response_id = raw.get("response_id")
+            tokens = raw.get("tokens")
+            turn.tokens = int(tokens) if isinstance(tokens, int) else turn.tokens
+            turn.response_status = raw.get("response_status")
+            turn.incomplete_reason = raw.get("incomplete_reason")
+        if not meta.response_deployment:
+            last_assistant = next(
+                (turn for turn in reversed(turns) if turn.role == "assistant"),
+                None,
+            )
+            if last_assistant:
+                meta.response_deployment = last_assistant.deployment
+                meta.response_status = (
+                    meta.response_status or last_assistant.response_status
+                )
+                meta.incomplete_reason = (
+                    meta.incomplete_reason or last_assistant.incomplete_reason
+                )
+        return cls(path=path, meta=meta, turns=turns)
 
 
 # ---------------------------------------------------------------------------
@@ -221,11 +285,29 @@ def _parse_body(body: str) -> list[Turn]:
         # Strip the leading separator on subsequent turns
         chunk = chunk.rstrip("\n").rstrip("-").rstrip()
         ts = ""
+        deployment = None
+        tokens = None
         ann = _ANNOTATION_RE.match(chunk)
         if ann:
-            ts = ann.group("ts").split("·")[0].strip()
+            annotation = [part.strip() for part in ann.group("ts").split("·")]
+            ts = annotation[0]
+            if role == "assistant":
+                for part in annotation[1:]:
+                    token_match = re.fullmatch(r"(\d+)\s+tokens?", part)
+                    if token_match:
+                        tokens = int(token_match.group(1))
+                    elif deployment is None:
+                        deployment = part
             chunk = chunk[ann.end():].lstrip("\n")
-        turns.append(Turn(role=role, content=chunk, timestamp=ts))
+        turns.append(
+            Turn(
+                role=role,
+                content=chunk,
+                timestamp=ts,
+                deployment=deployment,
+                tokens=tokens,
+            )
+        )
     return turns
 
 

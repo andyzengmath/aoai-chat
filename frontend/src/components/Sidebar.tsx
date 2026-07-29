@@ -6,19 +6,24 @@ import { useChatStore } from '../store/chatStore'
 export function Sidebar() {
   const conversations = useChatStore((s) => s.conversations)
   const activeId = useChatStore((s) => s.activeId)
+  const conversationDeletionInFlight = useChatStore(
+    (s) => s.conversationDeletionInFlight,
+  )
   const selectConversation = useChatStore((s) => s.selectConversation)
   const newConversation = useChatStore((s) => s.newConversation)
   const deleteConversation = useChatStore((s) => s.deleteConversation)
   const openSettings = useChatStore((s) => s.openSettings)
 
   return (
-    <aside className="w-72 shrink-0 border-r border-white/5 bg-black/30 backdrop-blur-xl flex flex-col">
+    <aside className="relative z-10 w-72 shrink-0 border-r border-white/5 surface-chrome flex flex-col">
       <div className="p-3 border-b border-white/5">
         <button
           onClick={newConversation}
+          disabled={conversationDeletionInFlight}
           className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl
                      bg-white/5 hover:bg-white/10 border border-white/10
-                     text-sm font-medium text-white transition-colors"
+                     text-sm font-medium text-white transition-colors
+                     disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <MessageSquarePlus size={16} />
           New chat
@@ -53,7 +58,10 @@ export function Sidebar() {
                 e.stopPropagation()
                 if (confirm(`Delete "${c.title}"?`)) deleteConversation(c.id)
               }}
-              className="opacity-0 group-hover:opacity-100 text-white/40 hover:text-red-400 transition-opacity"
+              disabled={conversationDeletionInFlight}
+              className="opacity-0 group-hover:opacity-100 text-white/40
+                         hover:text-red-400 transition-opacity
+                         disabled:cursor-not-allowed disabled:hover:text-white/40"
               title="Delete"
             >
               <Trash2 size={14} />

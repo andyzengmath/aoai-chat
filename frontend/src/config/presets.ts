@@ -104,44 +104,26 @@ export const DEFAULT_PROMPT = PROMPT_PRESETS[0].prompt
 
 // Reasoning effort values supported by GPT-5 / o-series reasoning models
 // on the Responses API. Chat Completions models ignore this parameter.
-export const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
-
-export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'medium'
-// Default raised from 16,384 → 32,768. The lower default starved heavy
-// reasoning prompts: gpt-5.4-pro burned the whole budget on internal
-// reasoning tokens before any output_text was emitted, surfacing as
-// "Model reasoned but produced no text output". 32k gives meaningful
-// headroom; users can dial higher (up to the slider max) in Parameters.
-export const DEFAULT_MAX_OUTPUT_TOKENS = 32768
-export const MAX_TOKENS_BOUNDS = { min: 256, max: 131072, step: 1024 } as const
-
-/**
- * Per-deployment reasoning-effort options. Verified against the live API:
- * - `gpt-5.4-pro` rejects `minimal`/`low` with "Supported values are:
- *   'medium', 'high', and 'xhigh'."
- * - `gpt-5.5` and the generic gpt-5 / o-series support the standard four.
- *
- * Add more entries when models surface different constraints.
- */
-const EFFORTS_BY_MODEL: Record<string, readonly ReasoningEffort[]> = {
-  'gpt-5.4-pro': ['medium', 'high', 'xhigh'],
-}
-const DEFAULT_EFFORT_SET: readonly ReasoningEffort[] = [
+export const REASONING_EFFORTS = [
+  'none',
   'minimal',
   'low',
   'medium',
   'high',
-]
+  'xhigh',
+  'max',
+] as const
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number]
 
-export function getValidEfforts(deployment: string): readonly ReasoningEffort[] {
-  return EFFORTS_BY_MODEL[deployment] ?? DEFAULT_EFFORT_SET
-}
+export const REASONING_MODES = ['standard', 'pro'] as const
+export type ReasoningMode = (typeof REASONING_MODES)[number]
 
-export function coerceEffort(
-  deployment: string,
-  effort: ReasoningEffort,
-): ReasoningEffort {
-  const valid = getValidEfforts(deployment)
-  return valid.includes(effort) ? effort : 'medium'
-}
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'medium'
+export const DEFAULT_REASONING_MODE: ReasoningMode = 'standard'
+// Default raised from 16,384 → 32,768. The lower default starved heavy
+// reasoning prompts: gpt-5.4-pro burned the whole budget on internal
+// reasoning tokens before any output_text was emitted, surfacing as
+// "Model reasoned but produced no text output". 32k gives meaningful
+// headroom; users can dial up to each deployment's reported output limit.
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32768
+export const MAX_TOKENS_BOUNDS = { min: 256, max: 128000, step: 256 } as const

@@ -1,4 +1,4 @@
-import { AlertTriangle, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, Play, RotateCcw, X } from 'lucide-react'
 
 import { useChatStore } from '../store/chatStore'
 
@@ -11,6 +11,7 @@ export function InlineError() {
   const lastError = useChatStore((s) => s.lastError)
   const streaming = useChatStore((s) => s.streaming)
   const retryLastError = useChatStore((s) => s.retryLastError)
+  const continueLastIncomplete = useChatStore((s) => s.continueLastIncomplete)
   const clearLastError = useChatStore((s) => s.clearLastError)
 
   if (!lastError || streaming) return null
@@ -28,23 +29,37 @@ export function InlineError() {
           />
           <div className="min-w-0 flex-1">
             <div className="text-[10px] uppercase tracking-[0.2em] font-mono text-rose-300/80">
-              No response
+              {lastError.kind === 'incomplete' ? 'Response incomplete' : 'No response'}
             </div>
             <p className="mt-1 text-[13px] leading-relaxed text-rose-100/85">
               {lastError.message}
             </p>
             <div className="mt-3 flex items-center gap-2">
-              <button
-                onClick={retryLastError}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                           bg-rose-400/15 hover:bg-rose-400/25
-                           border border-rose-300/30
-                           text-[12px] text-rose-100 font-medium
-                           transition-colors"
-              >
-                <RotateCcw size={11} />
-                Retry
-              </button>
+              {lastError.kind === 'incomplete' ? (
+                <button
+                  onClick={continueLastIncomplete}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                             bg-rose-400/15 hover:bg-rose-400/25
+                             border border-rose-300/30
+                             text-[12px] text-rose-100 font-medium
+                             transition-colors"
+                >
+                  <Play size={11} />
+                  Continue
+                </button>
+              ) : (
+                <button
+                  onClick={retryLastError}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                             bg-rose-400/15 hover:bg-rose-400/25
+                             border border-rose-300/30
+                             text-[12px] text-rose-100 font-medium
+                             transition-colors"
+                >
+                  <RotateCcw size={11} />
+                  Retry
+                </button>
+              )}
               <button
                 onClick={clearLastError}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
@@ -56,7 +71,9 @@ export function InlineError() {
                 Dismiss
               </button>
               <span className="ml-auto text-[10px] font-mono text-white/30">
-                Up-arrow also recalls this prompt
+                {lastError.kind === 'incomplete'
+                  ? 'Continues from the saved Azure response'
+                  : 'Up-arrow also recalls this prompt'}
               </span>
             </div>
           </div>

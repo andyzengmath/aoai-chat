@@ -1,6 +1,5 @@
 import { ArrowUpRight } from 'lucide-react'
-import { useEffect, useRef } from 'react'
-import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 import { EXAMPLE_PROMPTS } from '../config/examples'
 import type { Message } from '../store/chatStore'
@@ -12,27 +11,52 @@ import { StreamingBubble } from './StreamingBubble'
 
 export function ChatPane() {
   const messages = useChatStore((s) => s.activeMessages)
+  const activeId = useChatStore((s) => s.activeId)
   const streaming = useChatStore((s) => s.streaming)
-  const virtuosoRef = useRef<VirtuosoHandle | null>(null)
+  const scrollerRef = useRef<HTMLDivElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const pinnedToBottomRef = useRef(true)
+  const previousConversationIdRef = useRef(activeId)
+  const lastScrollTopRef = useRef(0)
 
-  // Original plan note: the streaming bubble lives **outside** the virtualized
-  // list so its frequent re-renders (every token, every reasoning chunk)
-  // never re-render the historical bubbles. Virtuoso's internal memoization
-  // would otherwise skip propagating reasoning updates to the streaming row
-  // because the row's `msg.content` doesn't change while reasoning streams.
   const items: Message[] = messages
 
-  // Keep the bottom in view while streaming.
-  const reasoningLen = streaming?.reasoning.length ?? 0
-  useEffect(() => {
-    if (streaming && virtuosoRef.current && messages.length > 0) {
-      virtuosoRef.current.scrollToIndex({
-        index: messages.length - 1,
-        align: 'end',
-        behavior: 'smooth',
-      })
+  useLayoutEffect(() => {
+    const conversationChanged =
+      previousConversationIdRef.current !== activeId
+    previousConversationIdRef.current = activeId
+    const scroller = scrollerRef.current
+    if (!scroller || messages.length === 0) return
+    const lastMessage = messages[messages.length - 1]
+    if (
+      !pinnedToBottomRef.current
+      && !conversationChanged
+      && lastMessage.role !== 'user'
+    ) {
+      return
     }
-  }, [messages.length, streaming?.content, reasoningLen, streaming])
+    pinnedToBottomRef.current = true
+    scroller.scrollTop = scroller.scrollHeight
+    lastScrollTopRef.current = scroller.scrollTop
+  }, [activeId, messages])
+
+  // Late font/layout changes can resize long Markdown messages after render.
+  // Stay pinned only while the user remains at the end; scrolling upward
+  // immediately hands full control back to the user.
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    const content = contentRef.current
+    if (!scroller || !content) return
+    const observer = new ResizeObserver(() => {
+      if (pinnedToBottomRef.current) {
+        scroller.scrollTop = scroller.scrollHeight
+        lastScrollTopRef.current = scroller.scrollTop
+      }
+    })
+    observer.observe(content)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [messages.length])
 
   if (items.length === 0 && !streaming) {
     return <EmptyState />
@@ -49,23 +73,43 @@ export function ChatPane() {
       />
 
       {items.length > 0 && (
-        <Virtuoso
-          ref={virtuosoRef}
-          className="relative z-10"
-          style={{ flex: 1, minHeight: 0 }}
-          data={items}
-          followOutput={false}
-          computeItemKey={(_, msg) => msg.id}
-          itemContent={(_, msg) => (
-            <div className="px-6 py-2">
-              <div className="max-w-3xl mx-auto">
-                <MessageBubble msg={msg} />
+        <div
+          ref={scrollerRef}
+          data-testid="conversation-scroller"
+          className="relative z-10 flex-1 min-h-0 overflow-y-auto"
+          onScroll={(event) => {
+            const scroller = event.currentTarget
+            const movedUp =
+              scroller.scrollTop < lastScrollTopRef.current - 0.5
+            const atBottom =
+              scroller.scrollHeight
+              - scroller.clientHeight
+              - scroller.scrollTop <= 1
+            if (movedUp) {
+              pinnedToBottomRef.current = false
+            } else if (atBottom) {
+              pinnedToBottomRef.current = true
+            }
+            lastScrollTopRef.current = scroller.scrollTop
+          }}
+        >
+          <div ref={contentRef}>
+            {items.map((msg) => (
+              <div
+                key={msg.id}
+                className={`conversation-message px-6 py-2 ${
+                  msg.role === 'assistant'
+                    ? 'conversation-message-assistant'
+                    : 'conversation-message-user'
+                }`}
+              >
+                <div className="max-w-3xl mx-auto">
+                  <MessageBubble msg={msg} />
+                </div>
               </div>
-            </div>
-          )}
-          increaseViewportBy={{ top: 400, bottom: 600 }}
-          initialTopMostItemIndex={Math.max(0, items.length - 1)}
-        />
+            ))}
+          </div>
+        </div>
       )}
       {streaming && (
         <div className="relative z-10 shrink-0 px-6 py-2 max-h-[60vh] overflow-y-auto">
@@ -91,7 +135,11 @@ export function ChatPane() {
 function EmptyState() {
   const sendMessage = useChatStore((s) => s.sendMessage)
   const selectedDeployment = useChatStore((s) => s.selectedDeployment)
+  const deployments = useChatStore((s) => s.deployments)
   const params = useChatStore((s) => s.params)
+  const hasVerifiedOutputLimit =
+    deployments.find((deployment) => deployment.id === selectedDeployment)
+      ?.max_output_tokens != null
 
   return (
     <div className="flex-1 flex items-center justify-center px-6 overflow-y-auto">
@@ -104,9 +152,12 @@ function EmptyState() {
           <p className="mt-5 text-[12px] text-white/35 font-mono tracking-[0.06em]">
             <span className="text-emerald-400/80">●</span>&nbsp; {selectedDeployment || 'no deployment'}
             <span className="mx-2.5 text-white/15">·</span>
+            {params.reasoningMode === 'pro' ? 'pro · ' : ''}
             {params.reasoningEffort}
             <span className="mx-2.5 text-white/15">·</span>
-            {params.maxOutputTokens.toLocaleString()} tok
+            {hasVerifiedOutputLimit
+              ? `${params.maxOutputTokens.toLocaleString()} tok`
+              : 'auto output'}
           </p>
         </div>
 

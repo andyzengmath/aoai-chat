@@ -13,6 +13,10 @@ export function SettingsDialog() {
   const addDeployment = useChatStore((s) => s.addDeployment)
   const removeDeployment = useChatStore((s) => s.removeDeployment)
   const setToast = useChatStore((s) => s.setToast)
+  const streaming = useChatStore((s) => s.streaming)
+  const deploymentMutationInFlight = useChatStore(
+    (s) => s.deploymentMutationInFlight,
+  )
 
   const [endpoint, setEndpoint] = useState('')
   const [newDeployment, setNewDeployment] = useState('')
@@ -37,7 +41,7 @@ export function SettingsDialog() {
 
   const submitAdd = async () => {
     const name = newDeployment.trim()
-    if (!name) return
+    if (!name || streaming || deploymentMutationInFlight) return
     try {
       await addDeployment(name)
       setNewDeployment('')
@@ -49,11 +53,11 @@ export function SettingsDialog() {
   return (
     <Dialog.Root open={open} onOpenChange={openSettings}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
+        <Dialog.Overlay className="fixed inset-0 surface-overlay z-40" />
         <Dialog.Content
           className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50
                      w-[min(560px,calc(100vw-2rem))] max-h-[85vh] overflow-y-auto
-                     rounded-2xl border border-white/10 bg-[#0F1020] p-6 shadow-2xl"
+                     rounded-2xl border border-white/10 surface-elevated p-6"
         >
           <div className="flex items-center justify-between mb-6">
             <Dialog.Title className="text-lg font-semibold tracking-tight">Settings</Dialog.Title>
@@ -120,11 +124,18 @@ export function SettingsDialog() {
                     <span className="font-mono text-sm">{d.id}</span>
                     <span className="text-[10px] text-white/40">
                       {d.supports_responses_api ? 'Responses API' : 'Chat Completions'}
+                      {d.model_version ? ` · ${d.model_version}` : ''}
+                      {d.context_window_tokens
+                        ? ` · ${Number((d.context_window_tokens / 1_000_000).toFixed(2))}M context`
+                        : ''}
+                      {d.reasoning_modes.includes('pro') ? ' · Pro mode' : ''}
                     </span>
                   </div>
                   <button
                     onClick={() => removeDeployment(d.id)}
-                    className="text-white/30 hover:text-red-400 transition-colors"
+                    disabled={!!streaming || deploymentMutationInFlight}
+                    className="text-white/30 hover:text-red-400 transition-colors
+                               disabled:opacity-30 disabled:cursor-not-allowed"
                     title="Remove"
                   >
                     <Trash2 size={14} />
@@ -136,15 +147,28 @@ export function SettingsDialog() {
               <input
                 value={newDeployment}
                 onChange={(e) => setNewDeployment(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && submitAdd()}
-                placeholder="deployment name (e.g. gpt-5.5)"
+                onKeyDown={(e) => {
+                  if (
+                    e.key === 'Enter'
+                    && !streaming
+                    && !deploymentMutationInFlight
+                  ) {
+                    void submitAdd()
+                  }
+                }}
+                disabled={!!streaming || deploymentMutationInFlight}
+                placeholder="deployment name (e.g. gpt-5.6-sol)"
                 className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10
                            text-sm text-white placeholder:text-white/30
                            focus:outline-none focus:border-cyan-400/40 font-mono"
               />
               <button
                 onClick={submitAdd}
-                disabled={!newDeployment.trim()}
+                disabled={
+                  !newDeployment.trim()
+                  || !!streaming
+                  || deploymentMutationInFlight
+                }
                 className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10
                            border border-white/10 text-sm text-white/80
                            disabled:opacity-40 transition-colors flex items-center gap-1"

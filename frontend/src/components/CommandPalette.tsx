@@ -99,7 +99,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.15 }}
-                className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+                className="fixed inset-0 z-40 surface-overlay"
               />
             </Dialog.Overlay>
 
@@ -111,8 +111,8 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                 transition={{ duration: 0.18, ease: 'easeOut' }}
                 className="fixed left-1/2 top-[15%] -translate-x-1/2 z-50
                            w-[min(600px,calc(100vw-2rem))] max-h-[60vh] overflow-hidden
-                           rounded-2xl border border-white/10 bg-[#0F1020]/95 backdrop-blur-xl
-                           shadow-2xl shadow-black/50 flex flex-col"
+                           rounded-2xl border border-white/10 surface-elevated
+                           flex flex-col"
               >
                 <Dialog.Title className="sr-only">Command palette</Dialog.Title>
                 <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5">

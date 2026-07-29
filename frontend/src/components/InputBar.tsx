@@ -19,6 +19,13 @@ export function InputBar() {
   const [text, setText] = useState('')
   const sendMessage = useChatStore((s) => s.sendMessage)
   const streaming = useChatStore((s) => s.streaming)
+  const conversationLoadingId = useChatStore((s) => s.conversationLoadingId)
+  const deploymentMutationInFlight = useChatStore(
+    (s) => s.deploymentMutationInFlight,
+  )
+  const conversationDeletionInFlight = useChatStore(
+    (s) => s.conversationDeletionInFlight,
+  )
   const selectedDeployment = useChatStore((s) => s.selectedDeployment)
   const promptHistory = useChatStore((s) => s.promptHistory)
   const taRef = useRef<HTMLTextAreaElement | null>(null)
@@ -32,7 +39,13 @@ export function InputBar() {
   const [historyIndex, setHistoryIndex] = useState<number | null>(null)
   const draftRef = useRef('')
 
-  const canSend = !streaming && text.trim().length > 0 && !!selectedDeployment
+  const canSend =
+    !streaming
+    && !conversationLoadingId
+    && !conversationDeletionInFlight
+    && !deploymentMutationInFlight
+    && text.trim().length > 0
+    && !!selectedDeployment
 
   const setTextAndPlaceCaretAtEnd = (next: string) => {
     setText(next)
@@ -125,8 +138,19 @@ export function InputBar() {
               }
             }}
             onKeyDown={onKeyDown}
+            disabled={
+              !!conversationLoadingId
+              || conversationDeletionInFlight
+              || deploymentMutationInFlight
+            }
             placeholder={
-              selectedDeployment
+              conversationLoadingId
+                ? 'Loading conversation…'
+                : conversationDeletionInFlight
+                ? 'Deleting conversation…'
+                : deploymentMutationInFlight
+                ? 'Updating deployments…'
+                : selectedDeployment
                 ? `Message ${selectedDeployment}…  (↑↓ for history · Shift+Enter for newline)`
                 : 'Pick a deployment in Settings first'
             }

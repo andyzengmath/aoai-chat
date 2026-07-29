@@ -12,8 +12,9 @@ from app.settings import (
     effective_config,
     ensure_save_dir,
     load_persisted,
-    normalize_endpoint,
     save_persisted,
+    validate_azure_endpoint,
+    validate_token_scope,
 )
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -46,10 +47,17 @@ async def put_config(update: ConfigUpdate) -> dict:
         data[k] = v
 
     ep = data.get("endpoint", "")
-    if ep:
-        if not (ep.startswith("https://") or ep.startswith("http://")):
-            raise HTTPException(400, "endpoint must start with https:// or http://")
-        data["endpoint"] = normalize_endpoint(ep)
+    try:
+        if ep:
+            data["endpoint"] = validate_azure_endpoint(ep)
+        if update.endpoint is not None and update.token_scope is None:
+            data["token_scope"] = ""
+        data["token_scope"] = validate_token_scope(
+            data.get("token_scope", ""),
+            data.get("endpoint", ""),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
     save_dir = data.get("save_dir", "")
     if save_dir:
@@ -67,7 +75,10 @@ async def put_config(update: ConfigUpdate) -> dict:
 async def test_auth() -> dict:
     """Sanity-check the managed-identity flow without touching AOAI itself."""
     cfg = effective_config()
-    scope = cfg.token_scope or None  # None → primary then fallback
+    try:
+        scope = validate_token_scope(cfg.token_scope, cfg.endpoint) or None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     try:
         provider = make_token_provider(scope)
         token = provider()

@@ -4,6 +4,7 @@
  * Native EventSource is GET-only; we POST a JSON body so we hand-parse the
  * SSE stream off `fetch` + `ReadableStream`.
  */
+import type { ReasoningEffort, ReasoningMode } from '../config/presets'
 
 export interface ChatStreamEvent {
   event: string
@@ -17,7 +18,8 @@ export interface ChatStreamRequest {
   previous_response_id?: string | null
   history?: { role: string; content: string }[]
   instructions?: string | null
-  reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
+  reasoning_effort?: ReasoningEffort | null
+  reasoning_mode?: Exclude<ReasoningMode, 'standard'> | null
   max_output_tokens?: number | null
 }
 

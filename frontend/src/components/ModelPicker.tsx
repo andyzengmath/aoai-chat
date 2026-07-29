@@ -8,6 +8,10 @@ export function ModelPicker() {
   const deployments = useChatStore((s) => s.deployments)
   const selected = useChatStore((s) => s.selectedDeployment)
   const setDeployment = useChatStore((s) => s.setDeployment)
+  const streaming = useChatStore((s) => s.streaming)
+  const deploymentMutationInFlight = useChatStore(
+    (s) => s.deploymentMutationInFlight,
+  )
 
   const current = deployments.find((d) => d.id === selected)
 
@@ -15,9 +19,18 @@ export function ModelPicker() {
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
+          disabled={!!streaming || deploymentMutationInFlight}
+          title={
+            streaming
+              ? 'Stop generation before switching deployments'
+              : deploymentMutationInFlight
+                ? 'Wait for the deployment update to finish'
+                : undefined
+          }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg
                      bg-white/5 hover:bg-white/10 border border-white/10
-                     text-sm text-white/80 transition-colors"
+                     text-sm text-white/80 transition-colors
+                     disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/5"
         >
           <Sparkles size={14} className="text-cyan-300" />
           <span className="font-mono">{selected || 'no deployment'}</span>
@@ -29,8 +42,7 @@ export function ModelPicker() {
         <DropdownMenu.Content
           align="start"
           sideOffset={4}
-          className="min-w-[240px] rounded-xl border border-white/10 bg-[#0F1020]/95 backdrop-blur-xl
-                     p-1 shadow-2xl shadow-black/50"
+          className="min-w-[240px] rounded-xl border border-white/10 surface-elevated p-1"
         >
           {deployments.length === 0 && (
             <div className="px-3 py-3 text-xs text-white/40">
@@ -51,6 +63,11 @@ export function ModelPicker() {
                 <span className="font-mono">{d.id}</span>
                 <span className="text-[10px] text-white/40">
                   {d.supports_responses_api ? 'Responses API' : 'Chat Completions'}
+                  {d.model_version ? ` · ${d.model_version}` : ''}
+                  {d.context_window_tokens
+                    ? ` · ${Number((d.context_window_tokens / 1_000_000).toFixed(2))}M ctx`
+                    : ''}
+                  {d.reasoning_modes.includes('pro') ? ' · Pro' : ''}
                 </span>
               </div>
               {d.id === selected && <Check size={14} className="text-cyan-300" />}
