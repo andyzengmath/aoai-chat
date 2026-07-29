@@ -15,9 +15,11 @@ from app.aoai_client import (
     KNOWN_RESPONSES_MODELS,
     KNOWN_RESPONSES_PREFIXES,
     _background_retry_delay,
+    _cancel_background_response,
     _is_transient_response_error,
     _make_client,
     _stream_responses,
+    get_model_capabilities,
     stream_response,
     supports_responses_api,
 )
@@ -99,6 +101,16 @@ def test_gpt56_deployment_serializes_verified_capabilities(monkeypatch):
     assert deployment["context_window_tokens"] == 1_050_000
     assert deployment["max_input_tokens"] == 922_000
     assert deployment["max_output_tokens"] == 128_000
+
+
+def test_unknown_responses_model_has_conservative_capabilities():
+    capabilities = get_model_capabilities("o3-custom-deployment")
+
+    assert capabilities.reasoning_efforts == ()
+    assert capabilities.reasoning_modes == ()
+    assert capabilities.context_window_tokens is None
+    assert capabilities.max_input_tokens is None
+    assert capabilities.max_output_tokens is None
 
 
 @pytest.mark.parametrize("mode", ["standard", "pro"])
@@ -813,6 +825,170 @@ def test_chat_route_saves_incomplete_partial_turn(monkeypatch, tmp_path):
     assert saved.meta.response_id == "resp_incomplete"
     assert saved.turns[-1].content == "Preserved partial answer"
     assert saved.meta.usage_total["output_tokens"] == 32_768
+
+
+@pytest.mark.asyncio
+async def test_chat_route_persists_before_terminal_event(monkeypatch, tmp_path):
+    transcript = Transcript.new(
+        save_dir=tmp_path,
+        first_user_msg="Solve this",
+        endpoint="https://example.openai.azure.com/",
+        deployment="gpt-5.6-sol",
+        conversation_id="conversation_ordering",
+    )
+    persisted = False
+    original_write = transcript.write_atomic
+
+    def tracked_write():
+        nonlocal persisted
+        original_write()
+        persisted = True
+
+    async def fake_stream_response(_request):
+        yield {"type": "delta", "text": "Partial answer"}
+        yield {
+            "type": "incomplete",
+            "response_id": "resp_ordering",
+            "usage": {"output_tokens": 10, "total_tokens": 20},
+            "path": "responses",
+            "reason": "max_output_tokens",
+        }
+
+    class CapturedEventSource:
+        def __init__(self, body_iterator, **_kwargs):
+            self.body_iterator = body_iterator
+
+    monkeypatch.setattr(transcript, "write_atomic", tracked_write)
+    monkeypatch.setattr(
+        chat_routes,
+        "_open_or_create_transcript",
+        lambda _request: transcript,
+    )
+    monkeypatch.setattr(chat_routes, "stream_response", fake_stream_response)
+    monkeypatch.setattr(chat_routes, "EventSourceResponse", CapturedEventSource)
+
+    response = await chat_routes.chat(
+        ChatRequest(
+            deployment="gpt-5.6-sol",
+            content="Solve this",
+            reasoning_effort="max",
+            reasoning_mode="pro",
+        )
+    )
+
+    async for event in response.body_iterator:
+        if event["event"] == "incomplete":
+            assert persisted
+
+
+@pytest.mark.asyncio
+async def test_response_error_event_uses_sdk_direct_fields(monkeypatch):
+    responses = _FakeResponses(
+        stream_events=[
+            _event(
+                "response.created",
+                response=SimpleNamespace(id="resp_error"),
+            ),
+            _event(
+                "error",
+                code="server_error",
+                message="Azure temporarily unavailable",
+                param=None,
+            ),
+        ],
+        retrieved_responses=[],
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+
+    events = [
+        event
+        async for event in _stream_responses(
+            ChatRequest(deployment="gpt-5.6-sol", content="test")
+        )
+    ]
+
+    assert events[-1] == {
+        "type": "error",
+        "error": "server_error",
+        "message": "Azure temporarily unavailable",
+    }
+
+
+@pytest.mark.asyncio
+async def test_refusal_output_is_streamed_and_reconciled(monkeypatch):
+    refusal_text = "I cannot help with that."
+    completed = _response(
+        "completed",
+        output=[
+            SimpleNamespace(
+                type="message",
+                content=[
+                    SimpleNamespace(type="refusal", refusal=refusal_text),
+                ],
+            )
+        ],
+    )
+    responses = _FakeResponses(
+        stream_events=[
+            _event(
+                "response.created",
+                response=SimpleNamespace(id="resp_refusal"),
+            ),
+            _event("response.refusal.delta", delta="I cannot "),
+            _event("response.completed", response=completed),
+        ],
+        retrieved_responses=[],
+    )
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(responses=responses),
+    )
+
+    events = [
+        event
+        async for event in _stream_responses(
+            ChatRequest(deployment="gpt-5.6-sol", content="test")
+        )
+    ]
+    text = "".join(
+        event.get("text", "") for event in events if event["type"] == "delta"
+    )
+
+    assert text == refusal_text
+    assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_background_cancel_cleanup_has_short_deadline(monkeypatch):
+    class SlowResponses:
+        def __init__(self):
+            self.finished = False
+
+        async def cancel(self, _response_id):
+            await anyio.sleep(0.2)
+            self.finished = True
+
+    responses = SlowResponses()
+    monkeypatch.setattr(
+        aoai_client,
+        "BACKGROUND_CANCEL_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    started = anyio.current_time()
+
+    await _cancel_background_response(
+        SimpleNamespace(responses=responses),
+        "resp_slow_cancel",
+    )
+
+    assert anyio.current_time() - started < 0.1
+    assert responses.finished is False
 
 
 @pytest.mark.asyncio

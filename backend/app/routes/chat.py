@@ -82,8 +82,10 @@ async def chat(req: ChatRequest):
                     reasoning_buf.append(event.get("text", ""))
                 elif t == "done":
                     final_done = event
+                    continue
                 elif t == "incomplete":
                     final_incomplete = event
+                    continue
                 elif t == "error":
                     had_error = True
                 yield {
@@ -102,9 +104,21 @@ async def chat(req: ChatRequest):
                 deployment=req.deployment,
                 response_id=final_response.get("response_id"),
                 usage=final_response.get("usage"),
+                response_status=(
+                    "incomplete" if final_incomplete else "completed"
+                ),
+                incomplete_reason=(
+                    final_incomplete.get("reason")
+                    if final_incomplete
+                    else None
+                ),
             )
             try:
                 transcript.write_atomic()
+                yield {
+                    "event": final_response["type"],
+                    "data": json.dumps(final_response, default=str),
+                }
                 yield {
                     "event": "saved",
                     "data": json.dumps({

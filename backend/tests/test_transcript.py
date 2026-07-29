@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from app.routes import conversations as conversation_routes
 from app.transcript import Transcript, find_by_id, list_summaries
 
 
@@ -65,6 +67,67 @@ def test_single_turn_roundtrip(tmp_save_dir):
     assert loaded.turns[0].content == "Hello world"
     assert loaded.turns[1].role == "assistant"
     assert loaded.turns[1].content == "Hi there!"
+    assert loaded.turns[1].deployment == "gpt-5.4-pro"
+    assert loaded.turns[1].response_id == "resp_001"
+    assert loaded.turns[1].tokens == 15
+
+
+def test_incomplete_turn_metadata_roundtrip(tmp_save_dir):
+    t = _new(tmp_save_dir, deployment="gpt-5.6-sol")
+    t.append_turn(
+        user_text="Write a long answer",
+        assistant_text="Partial answer",
+        deployment="gpt-5.6-sol",
+        response_id="resp_incomplete",
+        usage={"output_tokens": 128_000, "total_tokens": 128_010},
+        response_status="incomplete",
+        incomplete_reason="max_output_tokens",
+    )
+    t.write_atomic()
+
+    loaded = Transcript.load(t.path)
+
+    assert loaded.meta.response_status == "incomplete"
+    assert loaded.meta.incomplete_reason == "max_output_tokens"
+    assert loaded.meta.response_deployment == "gpt-5.6-sol"
+    assert loaded.turns[-1].response_status == "incomplete"
+    assert loaded.turns[-1].incomplete_reason == "max_output_tokens"
+
+
+@pytest.mark.asyncio
+async def test_conversation_detail_exposes_continuation_metadata(
+    tmp_save_dir,
+    monkeypatch,
+):
+    t = _new(tmp_save_dir, deployment="gpt-5.6-sol")
+    t.append_turn(
+        user_text="Write a long answer",
+        assistant_text="Partial answer",
+        deployment="gpt-5.6-sol",
+        response_id="resp_incomplete",
+        usage={"total_tokens": 128_010},
+        response_status="incomplete",
+        incomplete_reason="max_output_tokens",
+    )
+    t.write_atomic()
+    monkeypatch.setattr(
+        conversation_routes,
+        "effective_config",
+        lambda: SimpleNamespace(save_dir=str(tmp_save_dir)),
+    )
+    monkeypatch.setattr(
+        conversation_routes,
+        "ensure_save_dir",
+        lambda _config: tmp_save_dir,
+    )
+
+    detail = await conversation_routes.get_conversation(t.meta.id)
+
+    assert detail["response_status"] == "incomplete"
+    assert detail["incomplete_reason"] == "max_output_tokens"
+    assert detail["response_deployment"] == "gpt-5.6-sol"
+    assert detail["turns"][-1]["response_status"] == "incomplete"
+    assert detail["turns"][-1]["incomplete_reason"] == "max_output_tokens"
 
 
 def test_two_turns_accumulate_usage(tmp_save_dir):

@@ -52,6 +52,9 @@ BACKGROUND_POLL_INTERVAL_SECONDS = 2.0
 BACKGROUND_RETRIEVE_MAX_ATTEMPTS = 4
 BACKGROUND_RESPONSE_ID_WAIT_SECONDS = 60.0
 BACKGROUND_SERVER_ERROR_RETRY_DELAYS_SECONDS = (2.0, 5.0)
+BACKGROUND_CANCEL_TIMEOUT_SECONDS = float(
+    os.getenv("AOAI_CANCEL_TIMEOUT", "10")
+)
 
 # ---- httpx timeouts for the OpenAI streaming client -----------------------
 # httpx applies the `read` timeout *between* chunks — not as a total cap on
@@ -104,10 +107,7 @@ MODEL_CAPABILITIES: dict[str, ModelCapabilities] = {
     ),
 }
 
-DEFAULT_RESPONSES_CAPABILITIES = ModelCapabilities(
-    reasoning_efforts=("minimal", "low", "medium", "high"),
-    max_output_tokens=128_000,
-)
+DEFAULT_RESPONSES_CAPABILITIES = ModelCapabilities()
 
 
 def get_model_capabilities(model_or_id: str) -> ModelCapabilities:
@@ -247,6 +247,26 @@ def _missing_output_text(final_text: str, streamed_text: str) -> str | None:
     return final_text[len(streamed_text):]
 
 
+def _response_visible_text(response: Any) -> str:
+    parts: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in getattr(item, "content", None) or []:
+            content_type = getattr(content, "type", None)
+            if content_type == "output_text":
+                text = getattr(content, "text", "") or ""
+            elif content_type == "refusal":
+                text = getattr(content, "refusal", "") or ""
+            else:
+                continue
+            if text:
+                parts.append(text)
+    if parts:
+        return "".join(parts)
+    return getattr(response, "output_text", "") or ""
+
+
 def _response_failure_details(response: Any) -> tuple[str, str]:
     error = getattr(response, "error", None)
     code = getattr(error, "code", None) or "response_failed"
@@ -313,8 +333,16 @@ async def _cancel_background_response(
     response_id: str,
 ) -> None:
     try:
-        with anyio.CancelScope(shield=True):
+        with anyio.move_on_after(
+            BACKGROUND_CANCEL_TIMEOUT_SECONDS,
+            shield=True,
+        ) as scope:
             await client.responses.cancel(response_id)
+        if scope.cancel_called:
+            log.warning(
+                "timed out cancelling background response %s",
+                response_id,
+            )
     except Exception:  # noqa: BLE001
         log.exception("failed to cancel background response %s", response_id)
 
@@ -414,7 +442,7 @@ async def _recover_background_response(
                 continue
 
             if status == "completed":
-                final_text = getattr(response, "output_text", "") or ""
+                final_text = _response_visible_text(response)
                 missing_text = _missing_output_text(final_text, streamed_text)
                 if missing_text is None:
                     yield {
@@ -452,7 +480,7 @@ async def _recover_background_response(
                         "message": reason,
                     }
                     return
-                final_text = getattr(response, "output_text", "") or ""
+                final_text = _response_visible_text(response)
                 missing_text = _missing_output_text(final_text, streamed_text)
                 if missing_text is None:
                     yield {
@@ -732,7 +760,7 @@ async def _stream_responses_once(
                 resp = getattr(event, "response", None)
                 response_id = getattr(resp, "id", None) if resp else None
                 yield {"type": "start", "response_id": response_id, "path": "responses"}
-            elif ev_type == "response.output_text.delta":
+            elif ev_type == "response.output_text.delta" or ev_type == "response.refusal.delta":
                 delta = getattr(event, "delta", "") or ""
                 if delta:
                     streamed_text_parts.append(delta)
@@ -766,7 +794,7 @@ async def _stream_responses_once(
                                 "message": reason,
                             }
                             return
-                    final_text = getattr(resp, "output_text", "") or ""
+                    final_text = _response_visible_text(resp)
                     streamed_text = "".join(streamed_text_parts)
                     missing_text = _missing_output_text(final_text, streamed_text)
                     if missing_text is None:
@@ -825,7 +853,7 @@ async def _stream_responses_once(
                             "message": reason,
                         }
                         return
-                    final_text = getattr(resp, "output_text", "") or ""
+                    final_text = _response_visible_text(resp)
                     streamed_text = "".join(streamed_text_parts)
                     missing_text = _missing_output_text(final_text, streamed_text)
                     if missing_text is None:
@@ -875,10 +903,20 @@ async def _stream_responses_once(
                 return
             elif ev_type == "error":
                 err = getattr(event, "error", None)
+                code = (
+                    getattr(event, "code", None)
+                    or getattr(err, "code", None)
+                    or "stream_error"
+                )
+                message = (
+                    getattr(event, "message", None)
+                    or getattr(err, "message", None)
+                    or ""
+                )
                 yield {
                     "type": "error",
-                    "error": getattr(err, "code", "stream_error") if err else "stream_error",
-                    "message": (getattr(err, "message", "") if err else "")[:500],
+                    "error": code,
+                    "message": message[:500],
                 }
                 return
             elif ev_type == "keepalive" or ev_type == "":

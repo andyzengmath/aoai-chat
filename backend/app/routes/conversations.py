@@ -38,6 +38,9 @@ async def get_conversation(cid: str) -> dict:
         "endpoint": t.meta.endpoint,
         "deployment": t.meta.deployment,
         "response_id": t.meta.response_id,
+        "response_status": t.meta.response_status,
+        "incomplete_reason": t.meta.incomplete_reason,
+        "response_deployment": t.meta.response_deployment,
         "turn_count": t.meta.turn_count,
         "usage_total": t.meta.usage_total,
         "filename": path.name,
@@ -49,6 +52,8 @@ async def get_conversation(cid: str) -> dict:
                 "deployment": tn.deployment,
                 "response_id": tn.response_id,
                 "tokens": tn.tokens,
+                "response_status": tn.response_status,
+                "incomplete_reason": tn.incomplete_reason,
             }
             for tn in t.turns
         ],
