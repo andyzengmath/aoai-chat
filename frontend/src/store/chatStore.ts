@@ -483,6 +483,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         refreshFailure =
           ` List refresh also failed: ${(refreshError as Error).message}`
       }
+      clearDeletedActive()
       set({
         toast: {
           kind: 'error',
