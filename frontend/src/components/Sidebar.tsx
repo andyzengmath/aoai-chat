@@ -19,9 +19,11 @@ export function Sidebar() {
       <div className="p-3 border-b border-white/5">
         <button
           onClick={newConversation}
+          disabled={conversationDeletionInFlight}
           className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl
                      bg-white/5 hover:bg-white/10 border border-white/10
-                     text-sm font-medium text-white transition-colors"
+                     text-sm font-medium text-white transition-colors
+                     disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <MessageSquarePlus size={16} />
           New chat

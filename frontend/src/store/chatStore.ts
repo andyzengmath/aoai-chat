@@ -344,11 +344,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   newConversation: () => {
-    if (get().streaming) {
+    if (get().streaming || get().conversationDeletionInFlight) {
       set({
         toast: {
           kind: 'info',
-          message: 'Stop generation before starting a new chat.',
+          message: get().streaming
+            ? 'Stop generation before starting a new chat.'
+            : 'Wait for the conversation deletion to finish.',
         },
       })
       return
@@ -365,11 +367,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   selectConversation: async (id) => {
-    if (get().streaming) {
+    if (get().streaming || get().conversationDeletionInFlight) {
       set({
         toast: {
           kind: 'info',
-          message: 'Stop generation before switching conversations.',
+          message: get().streaming
+            ? 'Stop generation before switching conversations.'
+            : 'Wait for the conversation deletion to finish.',
         },
       })
       return
@@ -439,6 +443,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         (conversation) => conversation.id !== id,
       ),
     })
+    const clearDeletedActive = () => {
+      if (get().activeId !== id) return
+      conversationLoadGeneration += 1
+      set({
+        activeId: null,
+        activeMessages: [],
+        activeLastResponseId: null,
+        conversationLoadingId: null,
+        lastError: null,
+      })
+    }
     let deleted = false
     try {
       await api.deleteConversation(id)
@@ -447,12 +462,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         conversationLoadGeneration += 1
         set({ conversationLoadingId: null })
       }
-      const wasActive = get().activeId === id
       await get().refreshConversations()
-      if (wasActive) get().newConversation()
+      clearDeletedActive()
     } catch (e) {
       if (deleted) {
-        if (get().activeId === id) get().newConversation()
+        clearDeletedActive()
         set({
           toast: {
             kind: 'error',
@@ -640,6 +654,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
       return
     }
+    if (get().conversationDeletionInFlight) {
+      set({
+        toast: {
+          kind: 'info',
+          message: 'Wait for the conversation deletion to finish.',
+        },
+      })
+      return
+    }
     if (get().deploymentMutationInFlight) {
       set({
         toast: {
@@ -673,10 +696,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       params.reasoningMode === 'pro' && deployment?.reasoning_modes.includes('pro')
         ? 'pro'
         : null
-    const maxOutputTokens = Math.min(
-      params.maxOutputTokens,
-      deployment?.max_output_tokens ?? params.maxOutputTokens,
-    )
+    const maxOutputTokens =
+      deployment?.max_output_tokens == null
+        ? null
+        : Math.min(params.maxOutputTokens, deployment.max_output_tokens)
     let backgroundCancellable =
       deployment?.supports_responses_api === true &&
       (reasoningMode === 'pro' ||

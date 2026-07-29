@@ -46,7 +46,9 @@ export function ParametersPanel() {
   const validEfforts = selectedModel?.reasoning_efforts ?? []
   const supportsPro = selectedModel?.reasoning_modes.includes('pro') ?? false
   const showReasoning = validEfforts.length > 0
-  const maxOutputTokens = selectedModel?.max_output_tokens ?? MAX_TOKENS_BOUNDS.max
+  const verifiedMaxOutputTokens = selectedModel?.max_output_tokens ?? null
+  const maxOutputTokens =
+    verifiedMaxOutputTokens ?? MAX_TOKENS_BOUNDS.max
 
   // If the current effort isn't valid for the selected model, coerce it.
   useEffect(() => {
@@ -64,10 +66,13 @@ export function ParametersPanel() {
   }, [params.reasoningMode, selectedModel, setParams, supportsPro])
 
   useEffect(() => {
-    if (params.maxOutputTokens > maxOutputTokens) {
-      setParams({ maxOutputTokens })
+    if (
+      verifiedMaxOutputTokens !== null
+      && params.maxOutputTokens > verifiedMaxOutputTokens
+    ) {
+      setParams({ maxOutputTokens: verifiedMaxOutputTokens })
     }
-  }, [maxOutputTokens, params.maxOutputTokens, setParams])
+  }, [params.maxOutputTokens, setParams, verifiedMaxOutputTokens])
 
   // Close on Esc
   useEffect(() => {
@@ -289,6 +294,7 @@ export function ParametersPanel() {
               )}
 
               {params.reasoningEffort === 'max' &&
+                verifiedMaxOutputTokens !== null &&
                 params.maxOutputTokens < maxOutputTokens && (
                   <div className="rounded-lg border border-rose-300/25 bg-rose-400/[0.07] px-3 py-2.5">
                     <p className="text-[11px] text-rose-100/80 leading-relaxed">
@@ -316,6 +322,7 @@ export function ParametersPanel() {
                   </label>
                   <input
                     type="number"
+                    disabled={verifiedMaxOutputTokens === null}
                     min={MAX_TOKENS_BOUNDS.min}
                     max={maxOutputTokens}
                     step={MAX_TOKENS_BOUNDS.step}
@@ -333,22 +340,36 @@ export function ParametersPanel() {
                     }}
                     className="w-24 px-2 py-1 rounded-md bg-white/5 border border-white/10
                                text-xs text-white text-right font-mono
-                               focus:outline-none focus:border-cyan-400/40"
+                               focus:outline-none focus:border-cyan-400/40
+                               disabled:opacity-40 disabled:cursor-not-allowed"
                   />
                 </div>
                 <input
                   type="range"
+                  disabled={verifiedMaxOutputTokens === null}
                   min={MAX_TOKENS_BOUNDS.min}
                   max={maxOutputTokens}
                   step={MAX_TOKENS_BOUNDS.step}
                   value={params.maxOutputTokens}
                   onChange={(e) => setParams({ maxOutputTokens: Number(e.target.value) })}
-                  className="w-full accent-cyan-400"
+                  className="w-full accent-cyan-400
+                             disabled:opacity-40 disabled:cursor-not-allowed"
                 />
                 <div className="flex justify-between text-[10px] text-white/30 font-mono">
                   <span>{MAX_TOKENS_BOUNDS.min.toLocaleString()}</span>
-                  <span>{maxOutputTokens.toLocaleString()}</span>
+                  <span>
+                    {verifiedMaxOutputTokens === null
+                      ? 'unverified'
+                      : maxOutputTokens.toLocaleString()}
+                  </span>
                 </div>
+                {verifiedMaxOutputTokens === null && (
+                  <p className="text-[10px] leading-relaxed text-amber-200/60">
+                    This deployment has no verified output limit.
+                    max_output_tokens will be omitted so the model uses its
+                    service default.
+                  </p>
+                )}
               </section>
 
               <div className="pt-2 border-t border-white/5 text-[11px] text-white/30 text-center">

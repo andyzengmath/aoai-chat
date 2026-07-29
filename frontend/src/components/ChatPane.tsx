@@ -135,7 +135,11 @@ export function ChatPane() {
 function EmptyState() {
   const sendMessage = useChatStore((s) => s.sendMessage)
   const selectedDeployment = useChatStore((s) => s.selectedDeployment)
+  const deployments = useChatStore((s) => s.deployments)
   const params = useChatStore((s) => s.params)
+  const hasVerifiedOutputLimit =
+    deployments.find((deployment) => deployment.id === selectedDeployment)
+      ?.max_output_tokens != null
 
   return (
     <div className="flex-1 flex items-center justify-center px-6 overflow-y-auto">
@@ -151,7 +155,9 @@ function EmptyState() {
             {params.reasoningMode === 'pro' ? 'pro · ' : ''}
             {params.reasoningEffort}
             <span className="mx-2.5 text-white/15">·</span>
-            {params.maxOutputTokens.toLocaleString()} tok
+            {hasVerifiedOutputLimit
+              ? `${params.maxOutputTokens.toLocaleString()} tok`
+              : 'auto output'}
           </p>
         </div>
 
