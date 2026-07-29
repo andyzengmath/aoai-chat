@@ -52,11 +52,16 @@ export interface Turn {
   deployment: string | null
   response_id: string | null
   tokens: number | null
+  response_status: string | null
+  incomplete_reason: string | null
 }
 
 export interface ConversationDetail extends ConversationSummary {
   endpoint: string
   response_id: string | null
+  response_status: string | null
+  incomplete_reason: string | null
+  response_deployment: string | null
   turns: Turn[]
 }
 

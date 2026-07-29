@@ -8,6 +8,7 @@ export function ModelPicker() {
   const deployments = useChatStore((s) => s.deployments)
   const selected = useChatStore((s) => s.selectedDeployment)
   const setDeployment = useChatStore((s) => s.setDeployment)
+  const streaming = useChatStore((s) => s.streaming)
 
   const current = deployments.find((d) => d.id === selected)
 
@@ -15,9 +16,12 @@ export function ModelPicker() {
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
+          disabled={!!streaming}
+          title={streaming ? 'Stop generation before switching deployments' : undefined}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg
                      bg-white/5 hover:bg-white/10 border border-white/10
-                     text-sm text-white/80 transition-colors"
+                     text-sm text-white/80 transition-colors
+                     disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white/5"
         >
           <Sparkles size={14} className="text-cyan-300" />
           <span className="font-mono">{selected || 'no deployment'}</span>

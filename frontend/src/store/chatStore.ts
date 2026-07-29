@@ -84,6 +84,28 @@ type LastErrorState =
       deployment: string
     }
 
+const CONTINUE_PROMPT =
+  'Continue exactly where you stopped. Do not repeat prior material.'
+
+function incompleteErrorState(
+  conversationId: string | null,
+  responseId: string,
+  deployment: string,
+  reason: string,
+): LastErrorState {
+  return {
+    kind: 'incomplete',
+    message:
+      reason === 'max_output_tokens'
+        ? 'The response used its full output-token budget. The partial answer was saved; continue with a fresh budget.'
+        : `The response stopped early (${reason}). The partial answer was saved.`,
+    continuePrompt: CONTINUE_PROMPT,
+    conversationId,
+    responseId,
+    deployment,
+  }
+}
+
 export interface ChatParams {
   systemPrompt: string
   reasoningEffort: ReasoningEffort
@@ -149,6 +171,7 @@ export interface ChatStore {
   activeId: string | null
   activeMessages: Message[]
   activeLastResponseId: string | null
+  conversationLoadingId: string | null
 
   // ui state
   selectedDeployment: string
@@ -197,6 +220,7 @@ function newId() {
 let currentAbortController: AbortController | null = null
 let currentStopRequested = false
 let currentStopGraceTimer: ReturnType<typeof setTimeout> | null = null
+let conversationLoadGeneration = 0
 
 function cancelRemoteResponse(
   responseId: string | null | undefined,
@@ -262,6 +286,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   activeId: null,
   activeMessages: [],
   activeLastResponseId: null,
+  conversationLoadingId: null,
   selectedDeployment: '',
   streaming: null,
   toast: null,
@@ -315,10 +340,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
       return
     }
+    conversationLoadGeneration += 1
     set({
       activeId: null,
       activeMessages: [],
       activeLastResponseId: null,
+      conversationLoadingId: null,
       streaming: null,
       lastError: null,
     })
@@ -334,17 +361,43 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
       return
     }
+    const generation = ++conversationLoadGeneration
+    set({ conversationLoadingId: id })
     try {
       const detail = await api.getConversation(id)
+      if (generation !== conversationLoadGeneration) return
+      const responseDeployment =
+        detail.response_deployment || detail.deployment
+      const lastError =
+        detail.response_status === 'incomplete'
+        && detail.incomplete_reason === 'max_output_tokens'
+        && detail.response_id
+        && responseDeployment
+          ? incompleteErrorState(
+              detail.id,
+              detail.response_id,
+              responseDeployment,
+              detail.incomplete_reason,
+            )
+          : null
       set({
         activeId: detail.id,
         activeMessages: turnsToMessages(detail.turns),
         activeLastResponseId: detail.response_id,
+        conversationLoadingId: null,
+        selectedDeployment: responseDeployment || get().selectedDeployment,
         streaming: null,
-        lastError: null,
+        lastError,
       })
     } catch (e) {
-      set({ toast: { kind: 'error', message: `Load failed: ${(e as Error).message}` } })
+      if (generation !== conversationLoadGeneration) return
+      set({
+        conversationLoadingId: null,
+        toast: {
+          kind: 'error',
+          message: `Load failed: ${(e as Error).message}`,
+        },
+      })
     }
   },
 
@@ -368,12 +421,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  setDeployment: (name) =>
+  setDeployment: (name) => {
+    if (get().streaming) {
+      set({
+        toast: {
+          kind: 'info',
+          message: 'Stop generation before switching deployments.',
+        },
+      })
+      return
+    }
     set((state) => ({
       selectedDeployment: name,
       lastError:
         state.lastError?.kind === 'incomplete' ? null : state.lastError,
-    })),
+    }))
+  },
 
   openSettings: (open) => set({ settingsOpen: open }),
   openParameters: (open) => set({ parametersOpen: open }),
@@ -478,6 +541,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
       return
     }
+    if (get().conversationLoadingId) {
+      set({
+        toast: {
+          kind: 'info',
+          message: 'Wait for the conversation to finish loading.',
+        },
+      })
+      return
+    }
     const {
       selectedDeployment,
       activeId,
@@ -514,6 +586,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         reasoningEffort === 'max')
 
     const startedAt = Date.now()
+    let optimisticUserId: string | null = null
+    let terminalPersisted = false
     if (opts?.skipUserMessage) {
       // Retry path — the user message is already in activeMessages from the
       // failed attempt. Just kick off a fresh stream and clear lastError.
@@ -537,6 +611,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         content,
         timestamp: new Date().toISOString(),
       }
+      optimisticUserId = userMsg.id
       // Push to terminal-style history before the network call so up-arrow
       // recall works even if the request fails.
       get().pushPromptHistory(content)
@@ -774,9 +849,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             currentAbortController?.abort()
           }
         } else if (evt.event === 'done') {
+          terminalPersisted = true
           responseId = evt.data?.response_id ?? responseId
           path = evt.data?.path ?? path
         } else if (evt.event === 'incomplete') {
+          terminalPersisted = true
           responseId = evt.data?.response_id ?? responseId
           path = evt.data?.path ?? path
           incomplete = {
@@ -784,6 +861,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             usage: evt.data?.usage ?? null,
           }
         } else if (evt.event === 'saved') {
+          terminalPersisted = true
           await get().refreshConversations()
         } else if (evt.event === 'keepalive') {
           // Connection alive but no model progress. Update lastEventAt so
@@ -840,18 +918,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             : s.activeMessages,
           activeLastResponseId: incompleteResponseId,
           streaming: null,
-          lastError: {
-            kind: 'incomplete',
-            message:
-              terminal.reason === 'max_output_tokens'
-                ? 'The response used its full output-token budget. The partial answer was saved; continue with a fresh budget.'
-                : `The response stopped early (${terminal.reason}). The partial answer was saved.`,
-            continuePrompt:
-              'Continue exactly where you stopped. Do not repeat prior material.',
+          lastError: incompleteErrorState(
             conversationId,
-            responseId: incompleteResponseId,
-            deployment: selectedDeployment,
-          },
+            incompleteResponseId,
+            selectedDeployment,
+            terminal.reason,
+          ),
         }))
         return
       }
@@ -924,7 +996,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           },
         })
       } else if (isAbort) {
-        set({ streaming: null })
+        if (optimisticUserId && !terminalPersisted) {
+          const abortedUserId = optimisticUserId
+          set((state) => ({
+            activeId,
+            activeLastResponseId,
+            activeMessages: state.activeMessages.filter(
+              (message) => message.id !== abortedUserId,
+            ),
+            streaming: null,
+          }))
+        } else {
+          set({ streaming: null })
+        }
       } else {
         const msg = e instanceof ApiError ? e.message : (e as Error).message
         set({
