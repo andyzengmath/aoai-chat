@@ -41,7 +41,7 @@ export function SettingsDialog() {
 
   const submitAdd = async () => {
     const name = newDeployment.trim()
-    if (!name) return
+    if (!name || streaming || deploymentMutationInFlight) return
     try {
       await addDeployment(name)
       setNewDeployment('')
@@ -147,7 +147,16 @@ export function SettingsDialog() {
               <input
                 value={newDeployment}
                 onChange={(e) => setNewDeployment(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && submitAdd()}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === 'Enter'
+                    && !streaming
+                    && !deploymentMutationInFlight
+                  ) {
+                    void submitAdd()
+                  }
+                }}
+                disabled={!!streaming || deploymentMutationInFlight}
                 placeholder="deployment name (e.g. gpt-5.6-sol)"
                 className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10
                            text-sm text-white placeholder:text-white/30

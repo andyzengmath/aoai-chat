@@ -13,6 +13,7 @@ from functools import lru_cache
 
 from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import (
+    AzureAuthorityHosts,
     CredentialUnavailableError,
     DefaultAzureCredential,
     get_bearer_token_provider,
@@ -31,10 +32,20 @@ class AuthError(Exception):
     """Raised when no Azure credential is usable (typically: needs `az login`)."""
 
 
-@lru_cache(maxsize=1)
-def _credential() -> DefaultAzureCredential:
+def _authority_for_scope(scope: str) -> str | None:
+    if scope == US_GOV_SCOPE:
+        return AzureAuthorityHosts.AZURE_GOVERNMENT
+    if scope == CHINA_SCOPE:
+        return AzureAuthorityHosts.AZURE_CHINA
+    return None
+
+
+@lru_cache(maxsize=3)
+def _credential(authority: str | None = None) -> DefaultAzureCredential:
     # exclude_interactive_browser_credential left at default (excluded)
     # so we don't pop a browser in headless contexts.
+    if authority:
+        return DefaultAzureCredential(authority=authority)
     return DefaultAzureCredential()
 
 
@@ -45,7 +56,8 @@ def acquire_token(scope: str) -> str:
     use `make_token_provider()` which returns an auto-refreshing callable.
     """
     try:
-        return _credential().get_token(scope).token
+        authority = _authority_for_scope(scope)
+        return _credential(authority).get_token(scope).token
     except (CredentialUnavailableError, ClientAuthenticationError) as e:
         raise AuthError(f"failed to acquire token for {scope}: {e}") from e
 
@@ -59,8 +71,8 @@ def make_token_provider(scope: str | None = None) -> Callable[[], str]:
     On first failure with the primary scope, sticks to the fallback for
     subsequent calls (avoids a per-call retry storm).
     """
-    cred = _credential()
     primary_scope = scope or PRIMARY_SCOPE
+    cred = _credential(_authority_for_scope(primary_scope))
     primary = get_bearer_token_provider(cred, primary_scope)
     if primary_scope in SOVEREIGN_SCOPES:
         def sovereign_provider() -> str:

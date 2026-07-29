@@ -256,7 +256,7 @@ def test_make_client_uses_sovereign_scope(monkeypatch):
 
 def test_sovereign_provider_does_not_fallback_to_public_cloud(monkeypatch):
     scopes = []
-    monkeypatch.setattr(auth, "_credential", lambda: object())
+    monkeypatch.setattr(auth, "_credential", lambda _authority=None: object())
 
     def fake_provider(_credential, scope):
         scopes.append(scope)
@@ -270,6 +270,44 @@ def test_sovereign_provider_does_not_fallback_to_public_cloud(monkeypatch):
 
     assert provider() == "token"
     assert scopes == ["https://cognitiveservices.azure.us/.default"]
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected_authority"),
+    [
+        (
+            "https://cognitiveservices.azure.us/.default",
+            "login.microsoftonline.us",
+        ),
+        (
+            "https://cognitiveservices.azure.cn/.default",
+            "login.chinacloudapi.cn",
+        ),
+    ],
+)
+def test_sovereign_provider_uses_matching_authority(
+    monkeypatch,
+    scope,
+    expected_authority,
+):
+    credential_kwargs = []
+    monkeypatch.setattr(
+        auth,
+        "DefaultAzureCredential",
+        lambda **kwargs: credential_kwargs.append(kwargs) or object(),
+    )
+    monkeypatch.setattr(
+        auth,
+        "get_bearer_token_provider",
+        lambda _credential, _scope: lambda: "token",
+    )
+    auth._credential.cache_clear()
+
+    provider = auth.make_token_provider(scope)
+
+    assert provider() == "token"
+    assert credential_kwargs == [{"authority": expected_authority}]
+    auth._credential.cache_clear()
 
 
 @pytest.mark.asyncio

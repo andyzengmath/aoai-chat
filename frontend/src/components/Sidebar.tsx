@@ -6,6 +6,9 @@ import { useChatStore } from '../store/chatStore'
 export function Sidebar() {
   const conversations = useChatStore((s) => s.conversations)
   const activeId = useChatStore((s) => s.activeId)
+  const conversationDeletionInFlight = useChatStore(
+    (s) => s.conversationDeletionInFlight,
+  )
   const selectConversation = useChatStore((s) => s.selectConversation)
   const newConversation = useChatStore((s) => s.newConversation)
   const deleteConversation = useChatStore((s) => s.deleteConversation)
@@ -53,7 +56,10 @@ export function Sidebar() {
                 e.stopPropagation()
                 if (confirm(`Delete "${c.title}"?`)) deleteConversation(c.id)
               }}
-              className="opacity-0 group-hover:opacity-100 text-white/40 hover:text-red-400 transition-opacity"
+              disabled={conversationDeletionInFlight}
+              className="opacity-0 group-hover:opacity-100 text-white/40
+                         hover:text-red-400 transition-opacity
+                         disabled:cursor-not-allowed disabled:hover:text-white/40"
               title="Delete"
             >
               <Trash2 size={14} />

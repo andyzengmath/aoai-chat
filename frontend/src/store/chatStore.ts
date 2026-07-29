@@ -173,6 +173,7 @@ export interface ChatStore {
   activeMessages: Message[]
   activeLastResponseId: string | null
   conversationLoadingId: string | null
+  conversationDeletionInFlight: boolean
   deploymentMutationInFlight: boolean
 
   // ui state
@@ -297,6 +298,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   activeMessages: [],
   activeLastResponseId: null,
   conversationLoadingId: null,
+  conversationDeletionInFlight: false,
   deploymentMutationInFlight: false,
   selectedDeployment: '',
   streaming: null,
@@ -413,30 +415,34 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   deleteConversation: async (id) => {
-    if (get().streaming) {
+    if (get().streaming || get().conversationDeletionInFlight) {
       set({
         toast: {
           kind: 'info',
-          message: 'Stop generation before deleting a conversation.',
+          message: get().streaming
+            ? 'Stop generation before deleting a conversation.'
+            : 'Wait for the current conversation deletion to finish.',
         },
       })
       return
     }
-    const previousConversations = get().conversations
     if (get().conversationLoadingId === id) {
       conversationLoadGeneration += 1
     }
     set({
+      conversationDeletionInFlight: true,
       conversationLoadingId:
         get().conversationLoadingId === id
           ? null
           : get().conversationLoadingId,
-      conversations: previousConversations.filter(
+      conversations: get().conversations.filter(
         (conversation) => conversation.id !== id,
       ),
     })
+    let deleted = false
     try {
       await api.deleteConversation(id)
+      deleted = true
       if (get().conversationLoadingId === id) {
         conversationLoadGeneration += 1
         set({ conversationLoadingId: null })
@@ -445,13 +451,32 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       await get().refreshConversations()
       if (wasActive) get().newConversation()
     } catch (e) {
+      if (deleted) {
+        if (get().activeId === id) get().newConversation()
+        set({
+          toast: {
+            kind: 'error',
+            message:
+              `Conversation was deleted, but refreshing the list failed: ${(e as Error).message}`,
+          },
+        })
+        return
+      }
+      let refreshFailure = ''
+      try {
+        await get().refreshConversations()
+      } catch (refreshError) {
+        refreshFailure =
+          ` List refresh also failed: ${(refreshError as Error).message}`
+      }
       set({
-        conversations: previousConversations,
         toast: {
           kind: 'error',
-          message: `Delete failed: ${(e as Error).message}`,
+          message: `Delete failed: ${(e as Error).message}.${refreshFailure}`,
         },
       })
+    } finally {
+      set({ conversationDeletionInFlight: false })
     }
   },
 
@@ -553,6 +578,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   addDeployment: async (name) => {
+    if (get().streaming) {
+      set({
+        toast: {
+          kind: 'info',
+          message: 'Stop generation before adding deployments.',
+        },
+      })
+      return
+    }
     if (get().deploymentMutationInFlight) return
     set({ deploymentMutationInFlight: true })
     try {

@@ -62,7 +62,7 @@ backend/            FastAPI + azure-identity + openai SDK
       deployments.py
       chat.py        SSE stream
       conversations.py
-  tests/            pytest (97 cases)
+  tests/            pytest (99 cases)
 frontend/           React + Vite + TS + Tailwind v4
   src/
     api/            client + SSE consumer
@@ -217,7 +217,8 @@ Explicit scopes must match the endpoint cloud: public Azure accepts
 `https://ai.azure.com/.default` or
 `https://cognitiveservices.azure.com/.default`; Azure Government and China
 use their corresponding `cognitiveservices.azure.us` or
-`cognitiveservices.azure.cn` audience.
+`cognitiveservices.azure.cn` audience and Entra authority. Azure CLI users
+must select the matching cloud with `az cloud set` before `az login`.
 
 ## Plan
 
