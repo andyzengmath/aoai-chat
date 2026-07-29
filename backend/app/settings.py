@@ -151,11 +151,38 @@ def validate_azure_endpoint(url: str) -> str:
     return normalize_endpoint(candidate)
 
 
-def validate_token_scope(scope: str) -> str:
-    """Restrict bearer tokens to the two Azure AI audiences the app supports."""
-    from app.auth import FALLBACK_SCOPE, PRIMARY_SCOPE
+def validate_token_scope(scope: str, endpoint: str = "") -> str:
+    """Return a token scope paired with the endpoint's Azure cloud."""
+    from app.auth import (
+        CHINA_SCOPE,
+        FALLBACK_SCOPE,
+        PRIMARY_SCOPE,
+        US_GOV_SCOPE,
+    )
 
     candidate = scope.strip()
-    if candidate not in {"", PRIMARY_SCOPE, FALLBACK_SCOPE}:
+    if endpoint:
+        validated_endpoint = validate_azure_endpoint(endpoint)
+        host = (urlsplit(validated_endpoint).hostname or "").lower()
+        if host.endswith(".azure.us"):
+            allowed = {US_GOV_SCOPE}
+            default_scope = US_GOV_SCOPE
+        elif host.endswith(".azure.cn"):
+            allowed = {CHINA_SCOPE}
+            default_scope = CHINA_SCOPE
+        else:
+            allowed = {PRIMARY_SCOPE, FALLBACK_SCOPE}
+            default_scope = ""
+    else:
+        allowed = {
+            PRIMARY_SCOPE,
+            FALLBACK_SCOPE,
+            US_GOV_SCOPE,
+            CHINA_SCOPE,
+        }
+        default_scope = ""
+    if not candidate:
+        return default_scope
+    if candidate not in allowed:
         raise ValueError("token scope must target a supported Azure AI audience")
     return candidate

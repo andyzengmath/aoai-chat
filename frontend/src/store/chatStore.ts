@@ -173,6 +173,7 @@ export interface ChatStore {
   activeMessages: Message[]
   activeLastResponseId: string | null
   conversationLoadingId: string | null
+  deploymentMutationInFlight: boolean
 
   // ui state
   selectedDeployment: string
@@ -296,6 +297,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   activeMessages: [],
   activeLastResponseId: null,
   conversationLoadingId: null,
+  deploymentMutationInFlight: false,
   selectedDeployment: '',
   streaming: null,
   toast: null,
@@ -420,18 +422,41 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })
       return
     }
+    const previousConversations = get().conversations
+    if (get().conversationLoadingId === id) {
+      conversationLoadGeneration += 1
+    }
+    set({
+      conversationLoadingId:
+        get().conversationLoadingId === id
+          ? null
+          : get().conversationLoadingId,
+      conversations: previousConversations.filter(
+        (conversation) => conversation.id !== id,
+      ),
+    })
     try {
       await api.deleteConversation(id)
+      if (get().conversationLoadingId === id) {
+        conversationLoadGeneration += 1
+        set({ conversationLoadingId: null })
+      }
       const wasActive = get().activeId === id
       await get().refreshConversations()
       if (wasActive) get().newConversation()
     } catch (e) {
-      set({ toast: { kind: 'error', message: `Delete failed: ${(e as Error).message}` } })
+      set({
+        conversations: previousConversations,
+        toast: {
+          kind: 'error',
+          message: `Delete failed: ${(e as Error).message}`,
+        },
+      })
     }
   },
 
   setDeployment: (name) => {
-    if (get().streaming) {
+    if (get().streaming || get().deploymentMutationInFlight) {
       set({
         toast: {
           kind: 'info',
@@ -528,16 +553,37 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   addDeployment: async (name) => {
-    const r = await api.addDeployment(name)
-    set({ deployments: r.data })
-    if (!get().selectedDeployment) set({ selectedDeployment: name })
+    if (get().deploymentMutationInFlight) return
+    set({ deploymentMutationInFlight: true })
+    try {
+      const r = await api.addDeployment(name)
+      set({ deployments: r.data })
+      if (!get().selectedDeployment) set({ selectedDeployment: name })
+    } finally {
+      set({ deploymentMutationInFlight: false })
+    }
   },
 
   removeDeployment: async (name) => {
-    const r = await api.removeDeployment(name)
-    set({ deployments: r.data })
-    if (get().selectedDeployment === name) {
-      set({ selectedDeployment: r.data[0]?.id || '' })
+    if (get().streaming) {
+      set({
+        toast: {
+          kind: 'info',
+          message: 'Stop generation before removing deployments.',
+        },
+      })
+      return
+    }
+    if (get().deploymentMutationInFlight) return
+    set({ deploymentMutationInFlight: true })
+    try {
+      const r = await api.removeDeployment(name)
+      set({ deployments: r.data })
+      if (get().selectedDeployment === name) {
+        set({ selectedDeployment: r.data[0]?.id || '' })
+      }
+    } finally {
+      set({ deploymentMutationInFlight: false })
     }
   },
 
@@ -556,6 +602,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         toast: {
           kind: 'info',
           message: 'Wait for the conversation to finish loading.',
+        },
+      })
+      return
+    }
+    if (get().deploymentMutationInFlight) {
+      set({
+        toast: {
+          kind: 'info',
+          message: 'Wait for the deployment update to finish.',
         },
       })
       return
@@ -1000,6 +1055,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       //   3. User clicked Stop → clean cancel, no error card
       //   4. Real error (network, parse, etc.) → standard error card
       const isAbort =
+        currentStopRequested ||
         (currentAbortController?.signal.aborted ?? false) ||
         (e instanceof DOMException && e.name === 'AbortError') ||
         ((e as Error)?.name === 'AbortError')

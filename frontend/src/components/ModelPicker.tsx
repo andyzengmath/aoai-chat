@@ -9,6 +9,9 @@ export function ModelPicker() {
   const selected = useChatStore((s) => s.selectedDeployment)
   const setDeployment = useChatStore((s) => s.setDeployment)
   const streaming = useChatStore((s) => s.streaming)
+  const deploymentMutationInFlight = useChatStore(
+    (s) => s.deploymentMutationInFlight,
+  )
 
   const current = deployments.find((d) => d.id === selected)
 
@@ -16,8 +19,14 @@ export function ModelPicker() {
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button
-          disabled={!!streaming}
-          title={streaming ? 'Stop generation before switching deployments' : undefined}
+          disabled={!!streaming || deploymentMutationInFlight}
+          title={
+            streaming
+              ? 'Stop generation before switching deployments'
+              : deploymentMutationInFlight
+                ? 'Wait for the deployment update to finish'
+                : undefined
+          }
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg
                      bg-white/5 hover:bg-white/10 border border-white/10
                      text-sm text-white/80 transition-colors

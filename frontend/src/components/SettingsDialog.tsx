@@ -13,6 +13,10 @@ export function SettingsDialog() {
   const addDeployment = useChatStore((s) => s.addDeployment)
   const removeDeployment = useChatStore((s) => s.removeDeployment)
   const setToast = useChatStore((s) => s.setToast)
+  const streaming = useChatStore((s) => s.streaming)
+  const deploymentMutationInFlight = useChatStore(
+    (s) => s.deploymentMutationInFlight,
+  )
 
   const [endpoint, setEndpoint] = useState('')
   const [newDeployment, setNewDeployment] = useState('')
@@ -129,7 +133,9 @@ export function SettingsDialog() {
                   </div>
                   <button
                     onClick={() => removeDeployment(d.id)}
-                    className="text-white/30 hover:text-red-400 transition-colors"
+                    disabled={!!streaming || deploymentMutationInFlight}
+                    className="text-white/30 hover:text-red-400 transition-colors
+                               disabled:opacity-30 disabled:cursor-not-allowed"
                     title="Remove"
                   >
                     <Trash2 size={14} />
@@ -149,7 +155,11 @@ export function SettingsDialog() {
               />
               <button
                 onClick={submitAdd}
-                disabled={!newDeployment.trim()}
+                disabled={
+                  !newDeployment.trim()
+                  || !!streaming
+                  || deploymentMutationInFlight
+                }
                 className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10
                            border border-white/10 text-sm text-white/80
                            disabled:opacity-40 transition-colors flex items-center gap-1"

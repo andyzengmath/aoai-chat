@@ -1,8 +1,9 @@
 """Azure managed-identity token provider for AOAI.
 
-Tries the new Responses-API scope first (`https://ai.azure.com/.default`)
-and falls back to the legacy `https://cognitiveservices.azure.com/.default`
-on auth failure. Both produce valid bearer tokens for AOAI today.
+For public Azure, tries the new Responses-API scope first
+(`https://ai.azure.com/.default`) and falls back to the legacy
+`https://cognitiveservices.azure.com/.default` on auth failure. Sovereign
+cloud scopes never fall back across cloud boundaries.
 """
 from __future__ import annotations
 
@@ -21,6 +22,9 @@ log = logging.getLogger(__name__)
 
 PRIMARY_SCOPE = "https://ai.azure.com/.default"
 FALLBACK_SCOPE = "https://cognitiveservices.azure.com/.default"
+US_GOV_SCOPE = "https://cognitiveservices.azure.us/.default"
+CHINA_SCOPE = "https://cognitiveservices.azure.cn/.default"
+SOVEREIGN_SCOPES = {US_GOV_SCOPE, CHINA_SCOPE}
 
 
 class AuthError(Exception):
@@ -58,6 +62,17 @@ def make_token_provider(scope: str | None = None) -> Callable[[], str]:
     cred = _credential()
     primary_scope = scope or PRIMARY_SCOPE
     primary = get_bearer_token_provider(cred, primary_scope)
+    if primary_scope in SOVEREIGN_SCOPES:
+        def sovereign_provider() -> str:
+            try:
+                return primary()
+            except Exception as e:
+                raise AuthError(
+                    f"scope {primary_scope} failed: {e}"
+                ) from e
+
+        return sovereign_provider
+
     fallback = get_bearer_token_provider(cred, FALLBACK_SCOPE)
 
     state = {"use_fallback": primary_scope == FALLBACK_SCOPE}

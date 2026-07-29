@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from openai import APIConnectionError, APIStatusError
 
 import app.aoai_client as aoai_client
+import app.auth as auth
 import app.settings as app_settings
 from app.aoai_client import (
     KNOWN_RESPONSES_MODELS,
@@ -199,6 +200,76 @@ def test_official_azure_endpoint_is_accepted(endpoint):
 def test_untrusted_token_scope_is_rejected(scope):
     with pytest.raises(ValueError):
         app_settings.validate_token_scope(scope)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected_scope"),
+    [
+        (
+            "https://example.openai.azure.us/",
+            "https://cognitiveservices.azure.us/.default",
+        ),
+        (
+            "https://example.openai.azure.cn/",
+            "https://cognitiveservices.azure.cn/.default",
+        ),
+    ],
+)
+def test_sovereign_endpoint_resolves_matching_scope(
+    endpoint,
+    expected_scope,
+):
+    assert app_settings.validate_token_scope("", endpoint) == expected_scope
+    assert (
+        app_settings.validate_token_scope(expected_scope, endpoint)
+        == expected_scope
+    )
+
+
+def test_sovereign_scope_is_rejected_for_public_endpoint():
+    with pytest.raises(ValueError):
+        app_settings.validate_token_scope(
+            "https://cognitiveservices.azure.us/.default",
+            "https://example.openai.azure.com/",
+        )
+
+
+def test_make_client_uses_sovereign_scope(monkeypatch):
+    scopes = []
+    monkeypatch.setattr(
+        aoai_client,
+        "effective_config",
+        lambda: SimpleNamespace(
+            endpoint="https://example.openai.azure.us/",
+            token_scope="",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.auth.make_token_provider",
+        lambda scope: scopes.append(scope) or (lambda: "token"),
+    )
+
+    _make_client()
+
+    assert scopes == ["https://cognitiveservices.azure.us/.default"]
+
+
+def test_sovereign_provider_does_not_fallback_to_public_cloud(monkeypatch):
+    scopes = []
+    monkeypatch.setattr(auth, "_credential", lambda: object())
+
+    def fake_provider(_credential, scope):
+        scopes.append(scope)
+        return lambda: "token"
+
+    monkeypatch.setattr(auth, "get_bearer_token_provider", fake_provider)
+
+    provider = auth.make_token_provider(
+        "https://cognitiveservices.azure.us/.default"
+    )
+
+    assert provider() == "token"
+    assert scopes == ["https://cognitiveservices.azure.us/.default"]
 
 
 @pytest.mark.asyncio

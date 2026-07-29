@@ -33,7 +33,7 @@ reliability, and UX stabilization work.
 | Parameter persistence | Persisted Pro mode reset to Standard during application startup. | Validation ran before deployment metadata had loaded. | Defer model-specific coercion until the selected deployment is available. |
 | Deployment discovery | An environment-selected custom deployment was active but absent from the picker. | Environment overrides changed the default without joining the known-deployment list. | Merge the effective default into the returned deployment registry. |
 | Unverified model controls | Unknown GPT-5/o-series deployments advertised effort levels and a 128K output cap without a verified contract. | A generic Responses fallback supplied optimistic capabilities. | Keep Responses routing support while publishing conservative empty capabilities for unknown deployments. |
-| Configured token destinations | A mutable endpoint or token scope could send Azure bearer tokens and prompts outside Azure AI. | Configuration accepted HTTP, arbitrary hosts, and arbitrary audiences. | Require HTTPS, official Azure AI host suffixes, port 443, and one of the two supported Azure AI token scopes. |
+| Configured token destinations | A mutable endpoint or token scope could send Azure bearer tokens and prompts outside Azure AI. | Configuration accepted HTTP, arbitrary hosts, and arbitrary audiences. | Require HTTPS, official Azure AI host suffixes, port 443, and a cloud-matched public, Government, or China Azure AI token scope. |
 
 ## GPT-5.6 Contract
 
@@ -69,7 +69,7 @@ Repeatable repository checks:
 ```powershell
 cd backend
 uv run pytest -q
-uv run ruff check app/aoai_client.py app/routes/chat.py app/routes/config.py app/routes/conversations.py app/routes/deployments.py app/schemas.py app/settings.py app/transcript.py tests/test_aoai_client.py tests/test_transcript.py
+uv run ruff check app/aoai_client.py app/auth.py app/routes/chat.py app/routes/config.py app/routes/conversations.py app/routes/deployments.py app/schemas.py app/settings.py app/transcript.py tests/test_aoai_client.py tests/test_transcript.py
 
 cd ../frontend
 npm run build
@@ -77,7 +77,7 @@ npm run build
 
 Observed results:
 
-- Backend suite: 92 tests passing.
+- Backend suite: 97 tests passing.
 - Changed backend files pass Ruff.
 - Frontend TypeScript and production build pass.
 - Live Azure calls passed for Standard + `none`, Standard + `max`,

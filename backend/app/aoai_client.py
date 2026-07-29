@@ -199,7 +199,7 @@ def _make_client() -> AsyncOpenAI:
 
     cfg = effective_config()
     endpoint = validate_azure_endpoint(cfg.endpoint)
-    token_scope = validate_token_scope(cfg.token_scope)
+    token_scope = validate_token_scope(cfg.token_scope, endpoint)
     azure_token_provider = make_token_provider(token_scope or None)
 
     async def token_provider() -> str:

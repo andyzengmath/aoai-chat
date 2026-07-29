@@ -62,7 +62,7 @@ backend/            FastAPI + azure-identity + openai SDK
       deployments.py
       chat.py        SSE stream
       conversations.py
-  tests/            pytest (92 cases)
+  tests/            pytest (97 cases)
 frontend/           React + Vite + TS + Tailwind v4
   src/
     api/            client + SSE consumer
@@ -212,9 +212,12 @@ with Microsoft Foundry sample code. The `AOAI_*` names take precedence when
 both forms are set.
 
 Endpoints must use HTTPS and an official Azure OpenAI/AI Services hostname.
-`AOAI_TOKEN_SCOPE` may be left empty for automatic selection or set to
+`AOAI_TOKEN_SCOPE` may be left empty for cloud-aware automatic selection.
+Explicit scopes must match the endpoint cloud: public Azure accepts
 `https://ai.azure.com/.default` or
-`https://cognitiveservices.azure.com/.default`.
+`https://cognitiveservices.azure.com/.default`; Azure Government and China
+use their corresponding `cognitiveservices.azure.us` or
+`cognitiveservices.azure.cn` audience.
 
 ## Plan
 
