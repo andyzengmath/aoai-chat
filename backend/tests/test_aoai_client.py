@@ -22,6 +22,7 @@ from app.aoai_client import (
     _cancel_background_response,
     _is_transient_response_error,
     _make_client,
+    _stream_chat,
     _stream_responses,
     get_model_capabilities,
     stream_response,
@@ -38,6 +39,60 @@ from app.settings import (
     effective_config,
 )
 from app.transcript import Transcript
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_requests_and_emits_usage(monkeypatch):
+    create_kwargs = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            create_kwargs.update(kwargs)
+
+            async def chunks():
+                yield SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(content="OK"),
+                        )
+                    ],
+                    usage=None,
+                )
+                yield SimpleNamespace(
+                    choices=[],
+                    usage={
+                        "prompt_tokens": 3,
+                        "completion_tokens": 7,
+                        "total_tokens": 10,
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 5,
+                        },
+                    },
+                )
+
+            return chunks()
+
+    monkeypatch.setattr(
+        aoai_client,
+        "_make_client",
+        lambda: SimpleNamespace(
+            chat=SimpleNamespace(completions=FakeCompletions()),
+        ),
+    )
+
+    events = [
+        event
+        async for event in _stream_chat(
+            ChatRequest(deployment="gpt-4o", content="test")
+        )
+    ]
+
+    assert create_kwargs["stream_options"] == {"include_usage": True}
+    assert events[-1]["usage"]["total_tokens"] == 10
+    assert (
+        events[-1]["usage"]["completion_tokens_details"]["reasoning_tokens"]
+        == 5
+    )
 
 
 @pytest.mark.parametrize(
@@ -987,11 +1042,8 @@ def test_chat_route_saves_incomplete_partial_turn(monkeypatch, tmp_path):
     )
 
     async def fake_stream_response(_request):
-        yield {
-            "type": "start",
-            "response_id": "resp_incomplete",
-            "path": "responses",
-        }
+        yield {"type": "reasoning_delta", "text": "Think"}
+        yield {"type": "reasoning_delta", "text": "ing"}
         yield {"type": "delta", "text": "Preserved partial answer"}
         yield {
             "type": "incomplete",
@@ -1000,6 +1052,9 @@ def test_chat_route_saves_incomplete_partial_turn(monkeypatch, tmp_path):
                 "input_tokens": 100,
                 "output_tokens": 32_768,
                 "total_tokens": 32_868,
+                "output_tokens_details": {
+                    "reasoning_tokens": 30_000,
+                },
             },
             "path": "responses",
             "reason": "max_output_tokens",
@@ -1011,6 +1066,13 @@ def test_chat_route_saves_incomplete_partial_turn(monkeypatch, tmp_path):
         lambda _request: transcript,
     )
     monkeypatch.setattr(chat_routes, "stream_response", fake_stream_response)
+    elapsed = iter([100.0, 112.345])
+    monkeypatch.setattr(
+        chat_routes,
+        "monotonic",
+        lambda: next(elapsed),
+        raising=False,
+    )
 
     response = TestClient(app).post(
         "/api/chat",
@@ -1031,6 +1093,13 @@ def test_chat_route_saves_incomplete_partial_turn(monkeypatch, tmp_path):
     assert saved.meta.response_id == "resp_incomplete"
     assert saved.turns[-1].content == "Preserved partial answer"
     assert saved.meta.usage_total["output_tokens"] == 32_768
+    assert saved.turns[-1].thinking_ms == 12_345
+    assert saved.turns[-1].reasoning_tokens == 30_000
+    assert saved.turns[-1].reasoning_chars == 8
+    assert saved.turns[-1].path == "responses"
+    assert '"thinking_ms": 12345' in response.text
+    assert '"reasoning_tokens": 30000' in response.text
+    assert '"reasoning_chars": 8' in response.text
 
 
 @pytest.mark.asyncio

@@ -52,6 +52,10 @@ async def get_conversation(cid: str) -> dict:
                 "deployment": tn.deployment,
                 "response_id": tn.response_id,
                 "tokens": tn.tokens,
+                "thinking_ms": tn.thinking_ms,
+                "reasoning_tokens": tn.reasoning_tokens,
+                "reasoning_chars": tn.reasoning_chars,
+                "path": tn.path,
                 "response_status": tn.response_status,
                 "incomplete_reason": tn.incomplete_reason,
             }

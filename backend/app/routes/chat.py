@@ -15,6 +15,7 @@ import logging
 import re
 import secrets
 import time
+from time import monotonic
 
 import anyio
 from fastapi import APIRouter, HTTPException
@@ -128,6 +129,7 @@ async def chat(req: ChatRequest):
             }),
         }
 
+        response_started_at = monotonic()
         response_events = stream_response(req)
         try:
             async for event in response_events:
@@ -172,7 +174,11 @@ async def chat(req: ChatRequest):
         final_response = final_done or final_incomplete
         if final_response and not had_error:
             _revoke_cancel_grant(active_response_id)
-            transcript.append_turn(
+            thinking_ms = max(
+                0,
+                round((monotonic() - response_started_at) * 1000),
+            )
+            assistant_turn = transcript.append_turn(
                 user_text=req.content,
                 assistant_text="".join(assistant_buf),
                 deployment=req.deployment,
@@ -186,7 +192,18 @@ async def chat(req: ChatRequest):
                     if final_incomplete
                     else None
                 ),
+                thinking_ms=thinking_ms,
+                reasoning_chars=sum(
+                    len(chunk) for chunk in reasoning_buf
+                ),
+                path=final_response.get("path"),
             )
+            final_response = {
+                **final_response,
+                "thinking_ms": assistant_turn.thinking_ms,
+                "reasoning_tokens": assistant_turn.reasoning_tokens,
+                "reasoning_chars": assistant_turn.reasoning_chars,
+            }
             try:
                 transcript.write_atomic()
                 yield {

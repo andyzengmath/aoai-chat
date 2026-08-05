@@ -30,6 +30,7 @@ export interface Message {
   // see how long the model thought + how much reasoning happened after the
   // streaming bubble is gone. Only meaningful for assistant messages.
   thinkingMs?: number | null
+  reasoningTokens?: number | null
   reasoningChars?: number | null
   path?: 'responses' | 'chat' | null
 }
@@ -287,6 +288,10 @@ function turnsToMessages(turns: Turn[]): Message[] {
       tokens: t.tokens,
       deployment: t.deployment,
       responseId: t.response_id,
+      thinkingMs: t.thinking_ms,
+      reasoningTokens: t.reasoning_tokens,
+      reasoningChars: t.reasoning_chars,
+      path: t.path,
     }))
 }
 
@@ -794,6 +799,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // stale watchdog can't see (because reasoning_delta events keep
     // resetting it).
     let responseId: string | null = null
+    let terminalThinkingMs: number | null = null
+    let terminalReasoningTokens: number | null = null
+    let terminalReasoningChars: number | null = null
+    let terminalTotalTokens: number | null = null
     let cancelToken: string | null = null
     let incomplete:
       | {
@@ -996,10 +1005,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           terminalPersisted = true
           responseId = evt.data?.response_id ?? responseId
           path = evt.data?.path ?? path
+          terminalThinkingMs = evt.data?.thinking_ms ?? null
+          terminalReasoningTokens = evt.data?.reasoning_tokens ?? null
+          terminalReasoningChars = evt.data?.reasoning_chars ?? null
+          terminalTotalTokens = evt.data?.usage?.total_tokens ?? null
         } else if (evt.event === 'incomplete') {
           terminalPersisted = true
           responseId = evt.data?.response_id ?? responseId
           path = evt.data?.path ?? path
+          terminalThinkingMs = evt.data?.thinking_ms ?? null
+          terminalReasoningTokens = evt.data?.reasoning_tokens ?? null
+          terminalReasoningChars = evt.data?.reasoning_chars ?? null
           incomplete = {
             reason: evt.data?.reason || 'Response incomplete',
             usage: evt.data?.usage ?? null,
@@ -1051,8 +1067,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               tokens: terminal.usage?.total_tokens ?? null,
               deployment: selectedDeployment,
               responseId: incompleteResponseId,
-              thinkingMs: Date.now() - startedAt,
-              reasoningChars: reasoningCharsTotal,
+              thinkingMs: terminalThinkingMs ?? Date.now() - startedAt,
+              reasoningTokens: terminalReasoningTokens,
+              reasoningChars:
+                terminalReasoningChars ?? reasoningCharsTotal,
               path,
             }
           : null
@@ -1096,8 +1114,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         timestamp: new Date().toISOString(),
         deployment: selectedDeployment,
         responseId,
-        thinkingMs: Date.now() - startedAt,
-        reasoningChars: reasoningCharsTotal,
+        tokens: terminalTotalTokens,
+        thinkingMs: terminalThinkingMs ?? Date.now() - startedAt,
+        reasoningTokens: terminalReasoningTokens,
+        reasoningChars: terminalReasoningChars ?? reasoningCharsTotal,
         path,
       }
       set((s) => ({

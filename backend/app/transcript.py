@@ -78,6 +78,10 @@ class Turn:
     deployment: str | None = None
     response_id: str | None = None
     tokens: int | None = None
+    thinking_ms: int | None = None
+    reasoning_tokens: int | None = None
+    reasoning_chars: int | None = None
+    path: str | None = None
     response_status: str | None = None
     incomplete_reason: str | None = None
 
@@ -136,22 +140,44 @@ class Transcript:
         usage: dict[str, Any] | None,
         response_status: str = "completed",
         incomplete_reason: str | None = None,
-    ) -> None:
+        thinking_ms: int | None = None,
+        reasoning_chars: int | None = None,
+        path: str | None = None,
+    ) -> Turn:
         now = _utcnow_iso()
         self.turns.append(Turn(role="user", content=user_text, timestamp=now))
         total = (usage or {}).get("total_tokens") if isinstance(usage, dict) else None
-        self.turns.append(
-            Turn(
-                role="assistant",
-                content=assistant_text,
-                timestamp=_utcnow_iso(),
-                deployment=deployment,
-                response_id=response_id,
-                tokens=int(total) if isinstance(total, int) else None,
-                response_status=response_status,
-                incomplete_reason=incomplete_reason,
+        details = {}
+        if isinstance(usage, dict):
+            details = (
+                usage.get("output_tokens_details")
+                or usage.get("completion_tokens_details")
+                or {}
             )
+        reasoning_tokens = (
+            details.get("reasoning_tokens")
+            if isinstance(details, dict)
+            else None
         )
+        assistant_turn = Turn(
+            role="assistant",
+            content=assistant_text,
+            timestamp=_utcnow_iso(),
+            deployment=deployment,
+            response_id=response_id,
+            tokens=int(total) if isinstance(total, int) else None,
+            thinking_ms=thinking_ms,
+            reasoning_tokens=(
+                int(reasoning_tokens)
+                if isinstance(reasoning_tokens, int)
+                else None
+            ),
+            reasoning_chars=reasoning_chars,
+            path=path,
+            response_status=response_status,
+            incomplete_reason=incomplete_reason,
+        )
+        self.turns.append(assistant_turn)
         self.meta.updated_at = now
         self.meta.response_id = response_id or self.meta.response_id
         self.meta.response_status = response_status
@@ -162,12 +188,16 @@ class Transcript:
             for k in ("input_tokens", "output_tokens", "total_tokens"):
                 if k in usage and isinstance(usage[k], int):
                     self.meta.usage_total[k] = self.meta.usage_total.get(k, 0) + usage[k]
-            details = usage.get("output_tokens_details") or {}
-            r = details.get("reasoning_tokens") if isinstance(details, dict) else None
+            r = (
+                details.get("reasoning_tokens")
+                if isinstance(details, dict)
+                else None
+            )
             if isinstance(r, int):
                 self.meta.usage_total["reasoning_tokens"] = (
                     self.meta.usage_total.get("reasoning_tokens", 0) + r
                 )
+        return assistant_turn
 
     def _serialize_body(self) -> str:
         blocks: list[str] = []
@@ -192,6 +222,10 @@ class Transcript:
                 "deployment": turn.deployment,
                 "response_id": turn.response_id,
                 "tokens": turn.tokens,
+                "thinking_ms": turn.thinking_ms,
+                "reasoning_tokens": turn.reasoning_tokens,
+                "reasoning_chars": turn.reasoning_chars,
+                "path": turn.path,
                 "response_status": turn.response_status,
                 "incomplete_reason": turn.incomplete_reason,
             }
@@ -248,6 +282,28 @@ class Transcript:
             turn.response_id = raw.get("response_id")
             tokens = raw.get("tokens")
             turn.tokens = int(tokens) if isinstance(tokens, int) else turn.tokens
+            thinking_ms = raw.get("thinking_ms")
+            turn.thinking_ms = (
+                int(thinking_ms) if isinstance(thinking_ms, int) else None
+            )
+            reasoning_tokens = raw.get("reasoning_tokens")
+            turn.reasoning_tokens = (
+                int(reasoning_tokens)
+                if isinstance(reasoning_tokens, int)
+                else None
+            )
+            reasoning_chars = raw.get("reasoning_chars")
+            turn.reasoning_chars = (
+                int(reasoning_chars)
+                if isinstance(reasoning_chars, int)
+                else None
+            )
+            raw_path = raw.get("path")
+            turn.path = (
+                raw_path
+                if raw_path in {"responses", "chat"}
+                else ("responses" if turn.response_id else None)
+            )
             turn.response_status = raw.get("response_status")
             turn.incomplete_reason = raw.get("incomplete_reason")
         if not meta.response_deployment:

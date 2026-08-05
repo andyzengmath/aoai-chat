@@ -988,6 +988,7 @@ async def _stream_chat(req: ChatRequest) -> AsyncIterator[dict]:
         "model": req.deployment,
         "messages": messages,
         "stream": True,
+        "stream_options": {"include_usage": True},
     }
     if req.max_output_tokens:
         kwargs["max_completion_tokens"] = req.max_output_tokens

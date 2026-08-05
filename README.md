@@ -62,7 +62,7 @@ backend/            FastAPI + azure-identity + openai SDK
       deployments.py
       chat.py        SSE stream
       conversations.py
-  tests/            pytest (99 cases)
+  tests/            pytest (100 cases)
 frontend/           React + Vite + TS + Tailwind v4
   src/
     api/            client + SSE consumer

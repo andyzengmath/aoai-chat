@@ -81,10 +81,13 @@ function MessageFooter({ msg }: { msg: Message }) {
   if (msg.thinkingMs != null && msg.thinkingMs > 0) {
     parts.push(`thought ${formatThinking(msg.thinkingMs)}`)
   }
+  if (msg.reasoningTokens != null && msg.reasoningTokens > 0) {
+    parts.push(`${msg.reasoningTokens.toLocaleString()} reasoning tok`)
+  }
   if (msg.reasoningChars != null && msg.reasoningChars > 0) {
     parts.push(`${msg.reasoningChars.toLocaleString()} ch reasoning`)
   }
-  if (msg.tokens != null) parts.push(`${msg.tokens} tok`)
+  if (msg.tokens != null) parts.push(`${msg.tokens.toLocaleString()} tok`)
   if (msg.path) parts.push(msg.path === 'responses' ? 'responses · v1' : 'chat completions')
   if (parts.length === 0) return null
   return (

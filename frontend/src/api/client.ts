@@ -52,6 +52,10 @@ export interface Turn {
   deployment: string | null
   response_id: string | null
   tokens: number | null
+  thinking_ms: number | null
+  reasoning_tokens: number | null
+  reasoning_chars: number | null
+  path: 'responses' | 'chat' | null
   response_status: string | null
   incomplete_reason: string | null
 }

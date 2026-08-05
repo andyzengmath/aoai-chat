@@ -49,7 +49,15 @@ def test_single_turn_roundtrip(tmp_save_dir):
         assistant_text="Hi there!",
         deployment="gpt-5.4-pro",
         response_id="resp_001",
-        usage={"input_tokens": 5, "output_tokens": 10, "total_tokens": 15},
+        usage={
+            "input_tokens": 5,
+            "output_tokens": 10,
+            "total_tokens": 15,
+            "output_tokens_details": {"reasoning_tokens": 7},
+        },
+        thinking_ms=123_000,
+        reasoning_chars=8_431,
+        path="responses",
     )
     t.write_atomic()
     assert t.path.exists()
@@ -70,6 +78,10 @@ def test_single_turn_roundtrip(tmp_save_dir):
     assert loaded.turns[1].deployment == "gpt-5.4-pro"
     assert loaded.turns[1].response_id == "resp_001"
     assert loaded.turns[1].tokens == 15
+    assert loaded.turns[1].thinking_ms == 123_000
+    assert loaded.turns[1].reasoning_tokens == 7
+    assert loaded.turns[1].reasoning_chars == 8_431
+    assert loaded.turns[1].path == "responses"
 
 
 def test_incomplete_turn_metadata_roundtrip(tmp_save_dir):
@@ -82,6 +94,9 @@ def test_incomplete_turn_metadata_roundtrip(tmp_save_dir):
         usage={"output_tokens": 128_000, "total_tokens": 128_010},
         response_status="incomplete",
         incomplete_reason="max_output_tokens",
+        thinking_ms=10_500,
+        reasoning_chars=321,
+        path="responses",
     )
     t.write_atomic()
 
@@ -92,6 +107,9 @@ def test_incomplete_turn_metadata_roundtrip(tmp_save_dir):
     assert loaded.meta.response_deployment == "gpt-5.6-sol"
     assert loaded.turns[-1].response_status == "incomplete"
     assert loaded.turns[-1].incomplete_reason == "max_output_tokens"
+    assert loaded.turns[-1].thinking_ms == 10_500
+    assert loaded.turns[-1].reasoning_chars == 321
+    assert loaded.turns[-1].path == "responses"
 
 
 @pytest.mark.asyncio
@@ -108,6 +126,9 @@ async def test_conversation_detail_exposes_continuation_metadata(
         usage={"total_tokens": 128_010},
         response_status="incomplete",
         incomplete_reason="max_output_tokens",
+        thinking_ms=10_500,
+        reasoning_chars=321,
+        path="responses",
     )
     t.write_atomic()
     monkeypatch.setattr(
@@ -128,6 +149,9 @@ async def test_conversation_detail_exposes_continuation_metadata(
     assert detail["response_deployment"] == "gpt-5.6-sol"
     assert detail["turns"][-1]["response_status"] == "incomplete"
     assert detail["turns"][-1]["incomplete_reason"] == "max_output_tokens"
+    assert detail["turns"][-1]["thinking_ms"] == 10_500
+    assert detail["turns"][-1]["reasoning_chars"] == 321
+    assert detail["turns"][-1]["path"] == "responses"
 
 
 def test_two_turns_accumulate_usage(tmp_save_dir):

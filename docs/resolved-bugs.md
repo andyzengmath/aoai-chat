@@ -31,6 +31,7 @@ reliability, and UX stabilization work.
 | Output limits | The previous slider exceeded the documented 128,000-token maximum. | The UI used a generic 131,072 upper bound. | Clamp requests and controls to each deployment's documented limit in the backend capability map. |
 | Misleading max configuration | Pro + `max` could still run with the 32,768-token default output budget. | Reasoning effort and output budget are independent API controls. | Show the active budget constraint and provide a one-click **Use 128K** action without silently overriding explicit cost controls. |
 | Parameter persistence | Persisted Pro mode reset to Standard during application startup. | Validation ran before deployment metadata had loaded. | Defer model-specific coercion until the selected deployment is available. |
+| Assistant footer metadata | Reloaded conversations showed only deployment and total tokens, dropping elapsed time, reasoning details, and API path. | Those fields existed only in frontend memory and were never written into transcript turn metadata. | Measure metrics on the backend, persist per-turn elapsed time, actual reasoning tokens, reasoning-summary characters, total tokens, and API path, then hydrate the same footer after reload. |
 | Deployment discovery | An environment-selected custom deployment was active but absent from the picker. | Environment overrides changed the default without joining the known-deployment list. | Merge the effective default into the returned deployment registry. |
 | Unverified model controls | Unknown GPT-5/o-series deployments advertised effort levels and a 128K output cap without a verified contract. | A generic Responses fallback supplied optimistic capabilities. | Keep Responses routing support while publishing conservative empty capabilities for unknown deployments. |
 | Configured token destinations | A mutable endpoint or token scope could send Azure bearer tokens and prompts outside Azure AI. | Configuration accepted HTTP, arbitrary hosts, and arbitrary audiences. | Require HTTPS, official Azure AI host suffixes, port 443, and cloud-matched public, Government, or China token scopes and Entra authorities. |
@@ -77,7 +78,7 @@ npm run build
 
 Observed results:
 
-- Backend suite: 99 tests passing.
+- Backend suite: 100 tests passing.
 - Changed backend files pass Ruff.
 - Frontend TypeScript and production build pass.
 - Live Azure calls passed for Standard + `none`, Standard + `max`,
